@@ -564,6 +564,14 @@ export component MainWindow inherits Window {
 
     // Card 7: Wi-Fi & Mirroring Control
     in-out property <string> wifi-status-text: "Siap memindai Wi-Fi iPhone di LAN.";
+    in-out property <image> qr-image;
+    in-out property <string> qr-pin: "";
+    in-out property <string> qr-mode-label: "";
+    in-out property <string> qr-steps: "";
+    in-out property <string> qr-state: "idle"; // idle|advertising|paired|failed
+    in-out property <string> qr-mode: ""; // paired_macs|airplay_only
+    in-out property <int> qr-countdown: 0;
+    in-out property <string> qr-message: "";
 
     // Card 8 & 9: 5-Point Diagnostics, AMFI, Repair Driver, OTA Updater, & Anti-Blank Recovery
     in-out property <[DiagRow]> diagnostics: [];
@@ -697,6 +705,9 @@ export component MainWindow inherits Window {
 
     callback scan-wifi();
     callback pair-wifi();
+    callback pair-qr();
+    callback pair-qr-airplay-only();
+    callback cancel-pair-qr();
     callback refresh-diagnostics();
     callback unlock-developer-mode();
     callback repair-driver();
@@ -1489,8 +1500,8 @@ export component MainWindow inherits Window {
                                                 width: parent.width - 20px;
                                                 height: parent.height;
                                                 text: root.is-en
-                                                    ? "No iPhone detected yet. Connect USB or tap Scan Wi-Fi."
-                                                    : "Belum ada iPhone terdeteksi. Hubungkan USB atau klik Pindai Wi-Fi.";
+                                                    ? "No iPhone detected yet. Start QR pairing or tap Scan Wi-Fi."
+                                                    : "Belum ada iPhone terdeteksi. Mulai Pairing QR atau klik Pindai Wi-Fi.";
                                                 color: root.text-muted;
                                                 font-size: 10.5px;
                                                 vertical-alignment: center;
@@ -3162,6 +3173,99 @@ export component MainWindow inherits Window {
                                         }
                                     }
 
+                                    HorizontalLayout {
+                                        spacing: 6px;
+                                        ActionBtn {
+                                            horizontal-stretch: 1;
+                                            label: root.is-en ? "Pair via QR" : "Pasang via QR";
+                                            icon-name: "smartphone";
+                                            primary: true;
+                                            dark-mode: root.dark-mode;
+                                            clicked => { root.pair-qr(); }
+                                        }
+                                        ActionBtn {
+                                            horizontal-stretch: 1;
+                                            label: root.is-en ? "AirPlay QR" : "QR AirPlay";
+                                            icon-name: "wifi";
+                                            dark-mode: root.dark-mode;
+                                            clicked => { root.pair-qr-airplay-only(); }
+                                        }
+                                    }
+
+                                    if root.qr-state != "idle" : Rectangle {
+                                        background: root.dark-mode ? #111827CC : #FFFFFFE6;
+                                        border-color: root.dark-mode ? #334155 : #CBD5E1;
+                                        border-width: 1px;
+                                        border-radius: 10px;
+
+                                        VerticalLayout {
+                                            padding: 10px;
+                                            spacing: 7px;
+
+                                            Text {
+                                                text: root.qr-mode-label;
+                                                color: root.dark-mode ? #E5E7EB : #0F172A;
+                                                font-size: 12px;
+                                                font-weight: 700;
+                                            }
+
+                                            Image {
+                                                source: root.qr-image;
+                                                width: 132px;
+                                                height: 132px;
+                                                image-fit: contain;
+                                            }
+
+                                            if root.qr-pin != "" : Text {
+                                                text: "PIN: " + root.qr-pin;
+                                                color: root.dark-mode ? #34D399 : #047857;
+                                                font-size: 20px;
+                                                font-weight: 700;
+                                                horizontal-alignment: center;
+                                            }
+
+                                            Text {
+                                                text: root.qr-steps;
+                                                color: root.dark-mode ? #CBD5E1 : #334155;
+                                                font-size: 10.5px;
+                                                wrap: word-wrap;
+                                            }
+
+                                            Text {
+                                                text: root.qr-message;
+                                                color: root.qr-state == "failed"
+                                                    ? (root.dark-mode ? #FCA5A5 : #B91C1C)
+                                                    : (root.dark-mode ? #94A3B8 : #64748B);
+                                                font-size: 10px;
+                                                wrap: word-wrap;
+                                            }
+
+                                            HorizontalLayout {
+                                                spacing: 6px;
+                                                if root.qr-state == "failed" : ActionBtn {
+                                                    horizontal-stretch: 1;
+                                                    label: root.is-en ? "Retry" : "Coba lagi";
+                                                    dark-mode: root.dark-mode;
+                                                    clicked => {
+                                                        if (root.qr-mode == "airplay_only") {
+                                                            root.pair-qr-airplay-only();
+                                                        } else {
+                                                            root.pair-qr();
+                                                        }
+                                                    }
+                                                }
+                                                ActionBtn {
+                                                    horizontal-stretch: 1;
+                                                    label: root.is-en ? "Cancel" : "Batal";
+                                                    icon-name: "close";
+                                                    danger: root.qr-state == "advertising";
+                                                    dark-mode: root.dark-mode;
+                                                    clicked => { root.cancel-pair-qr(); }
+                                                }
+                                            }
+                                        }
+                                    }
+
                                     ActionBtn {
                                         label: root.is-streaming-or-starting
                                             ? (root.is-en ? "Disconnect Mirroring" : "Hentikan Mirroring")
@@ -3503,8 +3607,8 @@ export component MainWindow inherits Window {
 
                                     Text {
                                         text: root.is-en
-                                            ? "1. Connect iPhone via USB & tap Trust.\n2. Enable Settings > Privacy & Security > Developer Mode.\n3. Tap Set up Wi-Fi once via USB, then stream over LAN.\n4. Use AirPlay H.264 mode as universal fallback."
-                                            : "1. Hubungkan iPhone via USB & ketuk Percayai.\n2. Aktifkan Pengaturan > Privasi & Keamanan > Mode Pengembang.\n3. Klik Atur Wi-Fi sekali lewat USB, lalu mirror nirkabel.\n4. Gunakan mode AirPlay H.264 sebagai cadangan universal.";
+                                            ? "1. Tap Pair via QR, then scan the code with your iPhone (no cable).\n2. iOS 27+: open Settings > Developer > Paired Macs > Other Devices and enter the PIN.\n3. iOS 17-26: use Control Center > Screen Mirroring > iPhone Link (AirPlay H.264, basic control).\n4. USB \"Set up Wi-Fi\" is only an advanced fallback, never the first step."
+                                            : "1. Ketuk Pasang via QR, lalu pindai kode dengan iPhone (tanpa kabel).\n2. iOS 27+: buka Settings > Developer > Paired Macs > Other Devices dan masukkan PIN.\n3. iOS 17-26: buka Control Center > Screen Mirroring > iPhone Link (AirPlay H.264, kontrol dasar).\n4. \"Atur Wi-Fi\" lewat USB hanya cadangan lanjutan, bukan langkah pertama.";
                                         color: root.text-muted;
                                         font-size: 10.5px;
                                         wrap: word-wrap;

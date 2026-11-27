@@ -1819,7 +1819,7 @@ pub async fn connect_real_apple_rp_wifi_tunnel(
     let record = crate::wifi::find_record(udid)
         .or_else(|| crate::wifi::all_records().into_iter().next())
         .ok_or_else(|| {
-            "Record RemotePairing Wi-Fi (remote_<udid>.plist) belum ditemukan; colokkan kabel USB sekali lalu klik Set up Wi-Fi.".to_string()
+            "Record RemotePairing Wi-Fi (remote_<udid>.plist) belum ditemukan; mulai Pairing QR, atau gunakan 'Set up Wi-Fi' via USB hanya sebagai cadangan lanjutan.".to_string()
         })?;
     if record.private_key.len() != 32 {
         return Err("Record private_key Ed25519 tidak valid (bukan 32 byte).".into());
@@ -2139,7 +2139,9 @@ async fn connect_real_rp_single(
     let m4_raw = b64_decode(m4_b64).ok_or("M4 base64 invalid")?;
     let m4_tlv = tlv8_decode(&m4_raw);
     if let Some(err_b) = m4_tlv.get(&0x07) {
-        return Err(format!("Pair-Verify M4 rejected (code {err_b:02X?}); jalankan Set up Wi-Fi via USB."));
+        return Err(format!(
+            "Pair-Verify M4 rejected (code {err_b:02X?}); ulangi Pairing QR ('Set up Wi-Fi' via USB hanya untuk debug lanjutan)."
+        ));
     }
 
     // Step 4: Encrypted `createListener` (`transportProtocolType = "tcp"`)

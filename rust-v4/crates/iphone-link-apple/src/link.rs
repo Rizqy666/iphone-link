@@ -477,7 +477,7 @@ impl Link {
     /// Opens a wireless Wi-Fi CoreDevice RemotePairing TLS-PSK tunnel for `udid`.
     pub async fn wifi(udid: &str, ip_hint: Option<&str>) -> Result<Self, String> {
         let record = wifi::find_record(udid).ok_or_else(|| {
-            "Wi-Fi isn't set up for this device yet: connect USB cable once and run Set up Wi-Fi"
+            "Wi-Fi pairing isn't set up for this device yet: start QR pairing (advanced fallback: USB 'Set up Wi-Fi')"
                 .to_string()
         })?;
         let cached = wifi::get_device_wifi_state(udid);

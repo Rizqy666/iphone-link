@@ -3910,7 +3910,7 @@ async fn run_physical_wifi_display_async_ex(
     };
 
     Err(format!(
-        "Koneksi RemotePairing Wi-Fi ({ip}) gagal ({path_a_err} | {path_b_err}). Pastikan iPhone berada di Wi-Fi yang sama dan sudah pernah 'Set up Wi-Fi' sekali via USB."
+        "Koneksi RemotePairing Wi-Fi ({ip}) gagal ({path_a_err} | {path_b_err}). Pastikan iPhone berada di Wi-Fi yang sama dan sudah di-pairing lewat QR; 'Set up Wi-Fi' via USB hanya cadangan lanjutan."
     ))
 }
 

@@ -63,9 +63,9 @@ pub const IN_CALL: &str =
 
 /// Clear bilingual diagnostics when iOS 27.0.1 terminates cable-free Wi-Fi CoreDevice mirroring.
 pub const WIFI_COREDEVICE_IOS27_DIAGNOSTIC_ID: &str =
-    "Koneksi CoreDevice Wi-Fi gagal: iOS 27.0.1 menutup sesi wireless tanpa kabel (ConnectionTerminated). Pastikan iPhone menyala, layar tidak terkunci, dan terhubung ke Wi-Fi yang sama dengan PC, atau hubungkan kabel USB.";
+    "Koneksi CoreDevice Wi-Fi gagal: iOS 27.0.1 menutup sesi wireless tanpa kabel (ConnectionTerminated). Pastikan iPhone menyala, layar tidak terkunci, dan terhubung ke Wi-Fi yang sama dengan PC; ulangi Pairing QR bila perlu (kabel USB hanya cadangan lanjutan).";
 pub const WIFI_COREDEVICE_IOS27_DIAGNOSTIC_EN: &str =
-    "CoreDevice Wi-Fi connection failed: iOS 27.0.1 closed the cable-free wireless session (ConnectionTerminated). Ensure your iPhone is awake, unlocked, and on the same Wi-Fi network as your PC, or use USB Cable mode.";
+    "CoreDevice Wi-Fi connection failed: iOS 27.0.1 closed the cable-free wireless session (ConnectionTerminated). Ensure your iPhone is awake, unlocked, and on the same Wi-Fi network as your PC; retry QR pairing if needed (USB Cable mode is an advanced fallback).";
 
 /// One held RTP packet: `(sequence_number, timestamp, payload, marker)`.
 pub type HeldPacket = (u16, u32, Vec<u8>, bool);

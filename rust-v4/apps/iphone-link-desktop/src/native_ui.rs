@@ -17,6 +17,7 @@ use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, Ordering};
 use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
+use iphone_link_apple::pair_qr::{self, PairQrMode};
 use iphone_link_apple::{airplay, connection, hid, mirror};
 use iphone_link_video::d3d11_context::LiveD3d11Gpu;
 use iphone_link_video::mf_decoder::{
@@ -2071,6 +2072,265 @@ fn inprocess_api(
     String::from_utf8_lossy(&resp.body).into_owned()
 }
 
+/// Start a QR pairing session and poll it off the Slint event loop. The PIN is only ever copied
+/// into UI properties; it is never written to logs or disk.
+fn spawn_pair_qr_flow(
+    state: Arc<Mutex<server_v4::AppState>>,
+    web_dir: PathBuf,
+    ui_weak: slint::Weak<MainWindow>,
+    mode: PairQrMode,
+) {
+    std::thread::spawn(move || {
+        let lang_en = ui_weak.upgrade().map(|u| u.get_lang_en()).unwrap_or(false);
+        let mode_str = mode.as_str().to_string();
+        // Set the mode before any early return so Retry after a failed start re-enters
+        // the same mode instead of silently switching to Paired Macs.
+        {
+            let ui_for_mode = ui_weak.clone();
+            let mode_for_ui = mode_str.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(u) = ui_for_mode.upgrade() {
+                    u.set_qr_mode(SharedString::from(mode_for_ui));
+                }
+            });
+        }
+        let body = format!(r#"{{"mode":"{}"}}"#, mode.as_str());
+        let start_raw = inprocess_api(&state, &web_dir, "POST", "/api/pair/qr/start", &body);
+        let start: serde_json::Value = match serde_json::from_str(&start_raw) {
+            Ok(v) => v,
+            Err(_) => {
+                let message = if lang_en {
+                    "QR pairing could not start. Please retry."
+                } else {
+                    "Pairing QR gagal dimulai. Silakan coba lagi."
+                };
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(u) = ui_weak.upgrade() {
+                        u.set_qr_state(SharedString::from("failed"));
+                        u.set_qr_message(SharedString::from(message));
+                    }
+                });
+                return;
+            }
+        };
+        if start.get("ok").and_then(serde_json::Value::as_bool) != Some(true) {
+            let fallback = if lang_en {
+                "Unknown QR pairing error"
+            } else {
+                "Error QR pairing tidak diketahui"
+            };
+            let detail = start
+                .get("error")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or(fallback)
+                .to_string();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(u) = ui_weak.upgrade() {
+                    u.set_qr_state(SharedString::from("failed"));
+                    u.set_qr_message(SharedString::from(detail));
+                }
+            });
+            return;
+        }
+
+        let pin = start
+            .get("pin")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        let qr_url = start
+            .get("qr_url")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        let host_name = start
+            .get("host_name")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        let (mode_label, steps) = match mode {
+            PairQrMode::PairedMacs => (
+                if lang_en {
+                    "iOS 27+ · Paired Macs (no USB)"
+                } else {
+                    "iOS 27+ · Paired Macs (tanpa USB)"
+                },
+                if lang_en {
+                    "Scan the QR to open the pairing page, then on the iPhone go to Settings → Developer → Paired Macs → Other Devices and enter the PIN shown above."
+                } else {
+                    "Pindai QR untuk membuka halaman pairing, lalu di iPhone buka Settings → Developer → Paired Macs → Other Devices dan masukkan PIN di atas."
+                },
+            ),
+            PairQrMode::AirPlayOnly => (
+                if lang_en {
+                    "iOS 17–26 · AirPlay only (no USB)"
+                } else {
+                    "iOS 17–26 · AirPlay saja (tanpa USB)"
+                },
+                if lang_en {
+                    "Scan the QR, then open Control Center → Screen Mirroring → iPhone Link. This mode uses AirPlay H.264 with basic control; RemoteXPC HID needs iOS 27+."
+                } else {
+                    "Pindai QR, lalu buka Control Center → Screen Mirroring → iPhone Link. Mode ini memakai AirPlay H.264 dengan kontrol dasar; HID RemoteXPC butuh iOS 27+."
+                },
+            ),
+        };
+        let qr_image = pair_qr::qr_rgba_for_url(&qr_url).ok().map(|(rgba, w, h)| {
+            let pixels = SharedPixelBuffer::<Rgba8Pixel>::clone_from_slice(&rgba, w, h);
+            Image::from_rgba8(pixels)
+        });
+        let message = if lang_en {
+            format!("Waiting for the iPhone… Host: {host_name}")
+        } else {
+            format!("Menunggu iPhone… Host: {host_name}")
+        };
+        let pin_ui = pin.clone();
+        let image_ui = qr_image.clone();
+        let mode_ui = mode_str;
+        let label_ui = mode_label.to_string();
+        let steps_ui = steps.to_string();
+        let message_ui = message.clone();
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(u) = ui_weak.upgrade() {
+                if let Some(img) = image_ui {
+                    u.set_qr_image(img);
+                }
+                u.set_qr_pin(SharedString::from(pin_ui));
+                u.set_qr_mode(SharedString::from(mode_ui));
+                u.set_qr_mode_label(SharedString::from(label_ui));
+                u.set_qr_steps(SharedString::from(steps_ui));
+                u.set_qr_state(SharedString::from("advertising"));
+                u.set_qr_countdown(pair_qr::QR_SESSION_SECS as i32);
+                u.set_qr_message(SharedString::from(message_ui));
+                u.set_wifi_status_text(SharedString::from(if lang_en {
+                    "QR pairing is advertising on your Wi-Fi network."
+                } else {
+                    "Pairing QR sedang disiarkan di jaringan Wi-Fi."
+                }));
+            }
+        });
+
+        let deadline = Instant::now() + Duration::from_secs(pair_qr::QR_SESSION_SECS + 5);
+        loop {
+            std::thread::sleep(Duration::from_millis(500));
+            let status_raw = inprocess_api(&state, &web_dir, "GET", "/api/pair/qr/status", "");
+            let status: serde_json::Value = match serde_json::from_str(&status_raw) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+            match status.get("state").and_then(serde_json::Value::as_str) {
+                Some("advertising") => {
+                    let remaining = status
+                        .get("expires_in")
+                        .and_then(serde_json::Value::as_u64)
+                        .unwrap_or(0) as i32;
+                    let wait_msg = if lang_en {
+                        format!("Waiting for the iPhone… {remaining}s remaining")
+                    } else {
+                        format!("Menunggu iPhone… tersisa {remaining} detik")
+                    };
+                    let weak = ui_weak.clone();
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(u) = weak.upgrade() {
+                            u.set_qr_countdown(remaining);
+                            u.set_qr_message(SharedString::from(wait_msg));
+                        }
+                    });
+                }
+                Some("paired") => {
+                    let device_ip = status
+                        .get("device_ip")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("")
+                        .to_string();
+                    let paired_udid = status
+                        .get("udid")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("")
+                        .to_string();
+                    let _ = inprocess_api(&state, &web_dir, "POST", "/api/wifi/scan", "{}");
+                    let fresh = inprocess_api(&state, &web_dir, "GET", "/api/status", "");
+                    let mut matched_udid = paired_udid.clone();
+                    if let Ok(sv) = serde_json::from_str::<serde_json::Value>(&fresh) {
+                        if let Some(arr) = sv.get("devices").and_then(serde_json::Value::as_array) {
+                            for d in arr {
+                                let udid = d
+                                    .get("udid")
+                                    .and_then(serde_json::Value::as_str)
+                                    .unwrap_or("");
+                                let ip = d
+                                    .get("ip")
+                                    .or_else(|| d.get("wifiIp"))
+                                    .and_then(serde_json::Value::as_str)
+                                    .unwrap_or("");
+                                if !device_ip.is_empty() && ip.eq_ignore_ascii_case(&device_ip) {
+                                    matched_udid = udid.to_string();
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    let success = if lang_en {
+                        "QR pairing complete. Device selected; mirroring is ready."
+                    } else {
+                        "Pasangan QR berhasil. Perangkat dipilih; mirroring siap."
+                    };
+                    let weak = ui_weak.clone();
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(u) = weak.upgrade() {
+                            if let Ok(sv) = serde_json::from_str::<serde_json::Value>(&fresh) {
+                                let sum = parse_launchpad_from_status(&sv, lang_en);
+                                u.set_devices(ModelRc::new(VecModel::from(sum.cards)));
+                                u.set_wifi_status_text(SharedString::from(sum.wifi_text));
+                                u.set_device_model_name(SharedString::from(sum.model_name));
+                                u.set_device_title(SharedString::from(sum.hero_title));
+                                u.set_device_pill_title(SharedString::from(sum.pill_title));
+                                u.set_device_pill_detail(SharedString::from(sum.pill_detail));
+                                u.set_device_ready(sum.ready);
+                            }
+                            if !matched_udid.is_empty() {
+                                u.set_selected_udid(SharedString::from(matched_udid));
+                            }
+                            u.set_qr_state(SharedString::from("paired"));
+                            u.set_qr_pin(SharedString::from(""));
+                            u.set_qr_message(SharedString::from(success));
+                        }
+                    });
+                    std::thread::sleep(Duration::from_millis(1800));
+                    let weak = ui_weak.clone();
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(u) = weak.upgrade() {
+                            u.set_qr_state(SharedString::from("idle"));
+                            u.set_qr_message(SharedString::from(""));
+                        }
+                    });
+                    break;
+                }
+                Some("failed") => {
+                    let detail = status
+                        .get("error")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("QR pairing failed")
+                        .to_string();
+                    let weak = ui_weak.clone();
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(u) = weak.upgrade() {
+                            u.set_qr_state(SharedString::from("failed"));
+                            u.set_qr_pin(SharedString::from(""));
+                            u.set_qr_message(SharedString::from(detail));
+                        }
+                    });
+                    break;
+                }
+                Some("idle") => break,
+                _ => {}
+            }
+            if Instant::now() >= deadline {
+                break;
+            }
+        }
+    });
+}
+
 /// 1:1 Tahap 259 Bottom Bar dispatcher matching `handset/web/app.js` (`pressHome(1)`, `pressHome(2)`, `/mirror/gesture`).
 fn execute_tahap259_bottom_nav(
     state: &Arc<Mutex<server_v4::AppState>>,
@@ -3003,9 +3263,9 @@ fn resolve_udid_and_start_mirror_ex(
 
     if udid.is_empty() && mode != "airplay" {
         return Err(if lang_en {
-            "No iPhone selected or detected yet. Plug in USB or tap Pindai Wi-Fi first."
+            "No iPhone selected or detected yet. Start QR pairing or tap Pindai Wi-Fi first."
         } else {
-            "Belum ada iPhone terdeteksi. Hubungkan kabel USB atau klik Pindai Wi-Fi terlebih dahulu."
+            "Belum ada iPhone terdeteksi. Mulai Pairing QR atau klik Pindai Wi-Fi terlebih dahulu."
         }
         .to_string());
     }
@@ -6861,9 +7121,47 @@ pub fn run_native_ui(
                             if resp.contains("\"ok\":true") {
                                 "Wi-Fi pairing aktif"
                             } else {
-                                "Hubungkan iPhone via USB sebentar lalu coba Pairing Wi-Fi."
+                                "Mulai Pairing QR; 'Atur Wi-Fi' via USB hanya cadangan lanjutan."
                             },
                         ));
+                    }
+                });
+            });
+        });
+    }
+    {
+        let ui_weak = ui.as_weak();
+        let st_c = state.clone();
+        let wd_c = web_dir.clone();
+        ui.on_pair_qr(move || {
+            spawn_pair_qr_flow(st_c.clone(), wd_c.clone(), ui_weak.clone(), PairQrMode::PairedMacs);
+        });
+    }
+    {
+        let ui_weak = ui.as_weak();
+        let st_c = state.clone();
+        let wd_c = web_dir.clone();
+        ui.on_pair_qr_airplay_only(move || {
+            spawn_pair_qr_flow(st_c.clone(), wd_c.clone(), ui_weak.clone(), PairQrMode::AirPlayOnly);
+        });
+    }
+    {
+        let ui_weak = ui.as_weak();
+        let st_c = state.clone();
+        let wd_c = web_dir.clone();
+        ui.on_cancel_pair_qr(move || {
+            let st_t = st_c.clone();
+            let wd_t = wd_c.clone();
+            let ui_w2 = ui_weak.clone();
+            std::thread::spawn(move || {
+                let _ = inprocess_api(&st_t, &wd_t, "POST", "/api/pair/qr/cancel", "{}");
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(u) = ui_w2.upgrade() {
+                        u.set_qr_state(SharedString::from("idle"));
+                        u.set_qr_pin(SharedString::from(""));
+                        u.set_qr_mode(SharedString::from(""));
+                        u.set_qr_message(SharedString::from(""));
+                        u.set_qr_countdown(0);
                     }
                 });
             });

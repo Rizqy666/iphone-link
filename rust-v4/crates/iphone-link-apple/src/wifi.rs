@@ -415,6 +415,98 @@ pub fn save_remote_record(
     Ok(written)
 }
 
+/// Extra keys needed for parity with pymobiledevice3's device-initiated (`pair-host`) records.
+/// The four legacy keys stay untouched so `records()` / `rp_file()` keep working.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RecordExtra {
+    pub host_identifier: String,
+    pub host_alt_irk: [u8; 16],
+    pub peer_udid: String,
+    pub peer_model: String,
+    pub peer_name: String,
+}
+
+/// Sanitize an identifier before using it in `remote_<id>.plist`.
+pub fn safe_record_id(id: &str) -> String {
+    id.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+/// Stable path of the host's 16-byte RemotePairing mDNS identity key. Generated once and reused so
+/// the advertised `authTag` (and therefore reconnect validation) stays stable across sessions.
+pub fn host_alt_irk_path() -> Option<PathBuf> {
+    record_dir().map(|d| d.join("host_alt_irk.bin"))
+}
+
+pub fn load_or_create_host_alt_irk() -> Result<[u8; 16], String> {
+    let path = host_alt_irk_path().ok_or_else(|| "pairing directory unavailable".to_string())?;
+    if let Ok(bytes) = fs::read(&path) {
+        if let Ok(irk) = <[u8; 16]>::try_from(bytes.as_slice()) {
+            return Ok(irk);
+        }
+    }
+    let mut irk = [0u8; 16];
+    crate::win_cng::fill_random(&mut irk)?;
+    fs::create_dir_all(
+        path.parent()
+            .ok_or_else(|| "pairing directory parent unavailable".to_string())?,
+    )
+    .map_err(|e| format!("create pairing dir: {e}"))?;
+    fs::write(&path, irk).map_err(|e| format!("write host alt IRK: {e}"))?;
+    Ok(irk)
+}
+
+/// Like `save_remote_record()`, but writes the full pymobiledevice3-compatible record and backs up
+/// any existing file instead of silently destroying a USB-created pairing record.
+pub fn save_remote_record_ext(
+    udid: &str,
+    irk: &[u8; 16],
+    private_key: &[u8],
+    public_key: &[u8],
+    extra: &RecordExtra,
+) -> Result<Vec<PathBuf>, String> {
+    let safe_udid = safe_record_id(udid);
+    if safe_udid.is_empty() {
+        return Err("empty remote pairing identifier".to_string());
+    }
+    let mut d = plist::Dictionary::new();
+    d.insert("peer_alt_irk".into(), plist::Value::Data(irk.to_vec()));
+    d.insert("private_key".into(), plist::Value::Data(private_key.to_vec()));
+    d.insert("public_key".into(), plist::Value::Data(public_key.to_vec()));
+    d.insert("remote_unlock_host_key".into(), "".into());
+    d.insert("host_identifier".into(), plist::Value::String(extra.host_identifier.clone()));
+    d.insert(
+        "host_alt_irk".into(),
+        plist::Value::Data(extra.host_alt_irk.to_vec()),
+    );
+    d.insert("peer_udid".into(), plist::Value::String(extra.peer_udid.clone()));
+    d.insert("peer_model".into(), plist::Value::String(extra.peer_model.clone()));
+    d.insert("peer_name".into(), plist::Value::String(extra.peer_name.clone()));
+    let val = plist::Value::Dictionary(d);
+
+    let mut written = Vec::new();
+    for dir in record_dirs() {
+        fs::create_dir_all(&dir).map_err(|e| format!("create pairing dir {}: {e}", dir.display()))?;
+        let path = dir.join(format!("remote_{safe_udid}.plist"));
+        if path.exists() {
+            let record_stem = format!("remote_{safe_udid}.plist");
+            let backup = unique_backup_path(&dir, &record_stem)?;
+            fs::copy(&path, &backup)
+                .map_err(|e| format!("backup {} -> {}: {e}", path.display(), backup.display()))?;
+        }
+        plist::to_file_xml(&path, &val).map_err(|e| format!("write {}: {e}", path.display()))?;
+        written.push(path);
+    }
+    Ok(written)
+}
+
 pub fn rp_file(r: &Record, identifier: &str) -> Result<RpPairingFile, String> {
     let mut d = plist::Dictionary::new();
     d.insert("public_key".into(), plist::Value::Data(r.public_key.clone()));
@@ -435,6 +527,25 @@ fn now_epoch_secs() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
+}
+
+fn now_epoch_nanos() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0)
+}
+
+/// Choose a backup name that cannot collide within the same second (or process restart).
+fn unique_backup_path(dir: &Path, record_stem: &str) -> Result<PathBuf, String> {
+    let stamp = now_epoch_nanos();
+    for counter in 0..1000u32 {
+        let candidate = dir.join(format!("{record_stem}.bak-{stamp}-{counter}"));
+        if !candidate.exists() {
+            return Ok(candidate);
+        }
+    }
+    Err(format!("no free backup name for {record_stem} in {}", dir.display()))
 }
 
 fn now_iso_string() -> String {
@@ -1868,7 +1979,7 @@ fn probe_single_wifi_device_with_mdns_cache(
         paired: false,
         status_text: "Wi-Fi Not Configured".into(),
         status_tone: "muted".into(),
-        message: "Wi-Fi belum dikonfigurasi. Hubungkan iPhone via kabel lalu klik 'Set up Wi-Fi'.".into(),
+        message: "Wi-Fi belum dikonfigurasi. Mulai Pairing QR; 'Set up Wi-Fi' via USB hanya cadangan lanjutan.".into(),
     }
 }
 
@@ -1993,9 +2104,9 @@ pub fn get_wifi_status(selected_udid: Option<&str>, probe_network: bool) -> Wifi
             reachable: false,
             ip: last_ip,
             method: "cached".into(),
-            status_text: "🔌 Colok kabel USB 1x untuk aktifkan mode Wi‑Fi".into(),
+            status_text: "🔑 Mulai Pairing QR untuk mengaktifkan mode Wi‑Fi".into(),
             status_tone: "bad".into(),
-            note: "iPhone belum pernah di-setup untuk Wi-Fi. Colokkan kabel USB dan klik 'Set up Wi-Fi'.".into(),
+            note: "iPhone belum ter-pairing untuk Wi-Fi. Gunakan Pairing QR; 'Set up Wi-Fi' via USB hanya cadangan lanjutan.".into(),
             udid: Some(target_udid),
             devices: devices_map,
         };
@@ -2567,6 +2678,104 @@ mod tests {
         assert!(auth_tag_matches(&irk, ident, &tag));
         assert!(!auth_tag_matches(&[0u8; 16], ident, &tag));
         assert!(!auth_tag_matches(&irk, ident, "invalid!!"));
+    }
+
+    #[test]
+    fn test_save_remote_record_ext_backs_up_existing_record_and_keeps_legacy_reader_working() {
+        let _guard = MOCK_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp_root = std::env::temp_dir().join("iphone_link_qr_record_backup_test");
+        let _ = fs::remove_dir_all(&tmp_root);
+        fs::create_dir_all(&tmp_root).unwrap();
+        let pairing_dir = tmp_root.join("pairing");
+        std::env::set_var("IPHONE_LINK_PAIRING_DIR", &pairing_dir);
+
+        let udid = "00008130-QRTESTUDID";
+        let irk = [0x11u8; 16];
+        let private_key = b"qr-private-key";
+        let public_key = b"qr-public-key";
+        let extra = RecordExtra {
+            host_identifier: host_identifier("QR-Test-Host"),
+            host_alt_irk: [0x22u8; 16],
+            peer_udid: udid.to_string(),
+            peer_model: "iPhone17,3".to_string(),
+            peer_name: "QR Test iPhone".to_string(),
+        };
+
+        let record_path = pairing_dir.join(format!("remote_{udid}.plist"));
+        fs::create_dir_all(&pairing_dir).unwrap();
+        fs::write(&record_path, b"legacy-usb-record").unwrap();
+
+        let written = save_remote_record_ext(udid, &irk, private_key, public_key, &extra).unwrap();
+        assert_eq!(written, vec![record_path.clone()]);
+
+        let backups: Vec<PathBuf> = fs::read_dir(&pairing_dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| {
+                p.file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n.starts_with(&format!("remote_{udid}.plist.bak-")))
+            })
+            .collect();
+        assert_eq!(backups.len(), 1);
+        assert_eq!(fs::read(&backups[0]).unwrap(), b"legacy-usb-record");
+
+        let value: plist::Value = plist::from_file(&record_path).unwrap();
+        let dict = value.as_dictionary().unwrap();
+        assert_eq!(dict.get("peer_alt_irk").and_then(|v| v.as_data()), Some(irk.as_slice()));
+        assert_eq!(
+            dict.get("private_key").and_then(|v| v.as_data()),
+            Some(private_key.as_slice())
+        );
+        assert_eq!(
+            dict.get("public_key").and_then(|v| v.as_data()),
+            Some(public_key.as_slice())
+        );
+        assert_eq!(dict.get("remote_unlock_host_key").and_then(|v| v.as_string()), Some(""));
+        assert_eq!(
+            dict.get("host_identifier").and_then(|v| v.as_string()),
+            Some(extra.host_identifier.as_str())
+        );
+        assert_eq!(
+            dict.get("host_alt_irk").and_then(|v| v.as_data()),
+            Some(extra.host_alt_irk.as_slice())
+        );
+        assert_eq!(
+            dict.get("peer_udid").and_then(|v| v.as_string()),
+            Some(extra.peer_udid.as_str())
+        );
+        assert_eq!(
+            dict.get("peer_model").and_then(|v| v.as_string()),
+            Some(extra.peer_model.as_str())
+        );
+        assert_eq!(
+            dict.get("peer_name").and_then(|v| v.as_string()),
+            Some(extra.peer_name.as_str())
+        );
+
+        let loaded = records(&pairing_dir);
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].udid, udid);
+        assert_eq!(loaded[0].peer_alt_irk, irk);
+        assert_eq!(loaded[0].private_key, private_key);
+        assert_eq!(loaded[0].public_key, public_key);
+
+        // A second write in the same second must still produce a distinct backup.
+        save_remote_record_ext(udid, &irk, private_key, public_key, &extra).unwrap();
+        let backup_count = fs::read_dir(&pairing_dir)
+            .unwrap()
+            .flatten()
+            .filter(|e| {
+                e.file_name()
+                    .to_string_lossy()
+                    .starts_with(&format!("remote_{udid}.plist.bak-"))
+            })
+            .count();
+        assert_eq!(backup_count, 2);
+
+        std::env::remove_var("IPHONE_LINK_PAIRING_DIR");
+        let _ = fs::remove_dir_all(&tmp_root);
     }
 
     #[test]

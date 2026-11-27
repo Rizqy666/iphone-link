@@ -79,7 +79,7 @@ static AUTO_AUDIO_SPAWN_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
 pub static LATEST_SHORTCUT_URL_CACHE: Mutex<(String, u64)> = Mutex::new((String::new(), 0));
 pub static DEBUG_METRICS_HISTORY: Mutex<Vec<String>> = Mutex::new(Vec::new());
 pub const STANDALONE_INPROCESS_ONLY: bool = true;
-pub const INPROCESS_ROUTE_COUNT: usize = 50;
+pub const INPROCESS_ROUTE_COUNT: usize = 54;
 pub const APP_VERSION_V5: &str = "5.0.0";
 pub const APP_EDITION_V5: &str = "100% Pure Native Rust (Zero Python & Zero PowerShell)";
 
@@ -128,6 +128,7 @@ use iphone_link_apple::hid::{
 use iphone_link_apple::models::{
     clear_metadata_cache, discover_devices_with_metadata, snapshot_cached_devices_metadata_zero_io,
 };
+use iphone_link_apple::pair_qr::{self, PairQrMode};
 use iphone_link_apple::usbmux::list_connected_usb_devices;
 use iphone_link_apple::wifi::{get_wifi_status, pair_wifi_json, scan_wifi_json};
 
@@ -6261,6 +6262,15 @@ fn escape_json_str(s: &str) -> String {
     s.replace('\\', r#"\\"#).replace('"', r#"\""#)
 }
 
+/// Minimal HTML escaper for the narrow QR onboarding page; never interpolate raw host strings.
+fn escape_html(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
+}
+
 pub const DPAPI_PIN_PREFIX: &str = "dpapi:";
 
 fn is_test_loopback_only_env_server() -> bool {
@@ -8272,6 +8282,7 @@ pub fn is_lan_request_allowed(ip: IpAddr, method: &str, raw_path: &str) -> bool 
         .unwrap_or(raw_path);
     clean_path == "/c"
         || clean_path.starts_with("/c/")
+        || (method.eq_ignore_ascii_case("GET") && clean_path == "/q")
         || clean_path == "/api/shortcut/push"
         || clean_path == "/api/clipboard/push"
 }
@@ -10188,6 +10199,52 @@ pub fn handle_request(req: &HttpRequest, state: &Arc<Mutex<AppState>>, web_dir: 
             status_text: "Bad Request",
             content_type: "text/html; charset=utf-8",
             body: b"<!doctype html><html><head><meta charset='utf-8'></head><body>Invalid or missing URL.</body></html>".to_vec(),
+        };
+    }
+
+    // Narrow, token-scoped QR onboarding page. Allowed on LAN only via `is_lan_request_allowed`.
+    // It exposes no APIs and no file reads; a bad/expired token gets a generic rejection.
+    if req.method == "GET" && req_clean_path == "/q" {
+        let identifier = extract_query_param(&req.query, "i").unwrap_or_default();
+        let token = extract_query_param(&req.query, "c").unwrap_or_default();
+        let mode = extract_query_param(&req.query, "m").unwrap_or_default();
+        if let Some(info) = pair_qr::qr_page_info(&identifier, &token, &mode) {
+            let host = escape_html(&info.host_name);
+            let host_id = escape_html(&info.identifier);
+            let (pin_block, steps) = match info.mode {
+                PairQrMode::PairedMacs => {
+                    let pin = info.pin.unwrap_or_default();
+                    (
+                        format!(
+                            "<div style='font-size:44px;font-weight:700;letter-spacing:8px;margin:16px 0;'>{pin}</div>\
+                             <p style='font-size:13px;color:#555;'>Enter this one-time PIN on the iPhone.</p>"
+                        ),
+                        "1. Open Settings → Developer → Paired Macs.<br>2. Tap this PC under <b>Other Devices</b>.<br>3. Enter the 6-digit PIN above.",
+                    )
+                }
+                PairQrMode::AirPlayOnly => (
+                    String::new(),
+                    "1. Open Control Center → Screen Mirroring.<br>2. Choose <b>iPhone Link</b> on this Wi-Fi network.<br>3. AirPlay mirroring uses H.264 with basic control.",
+                ),
+            };
+            let html = format!(
+                "<!doctype html><html><head><meta charset='utf-8'>\
+                 <meta name='viewport' content='width=device-width,initial-scale=1'>\
+                 <title>iPhone Link — Pair</title></head>\
+                 <body style='font-family:-apple-system,sans-serif;text-align:center;padding:24px;background:#f7f7f8;'>\
+                 <h2 style='margin-bottom:4px;'>iPhone Link</h2>\
+                 <p style='font-size:14px;color:#444;'>Pair with <b>{host}</b></p>{pin_block}\
+                 <div style='font-size:14px;line-height:1.6;text-align:left;max-width:420px;margin:20px auto;'>{steps}</div>\
+                 <p style='font-size:11px;color:#888;word-break:break-all;'>Host ID: {host_id}</p>\
+                 </body></html>"
+            );
+            return HttpResponse::ok_html(&html);
+        }
+        return HttpResponse {
+            status_code: 400,
+            status_text: "Bad Request",
+            content_type: "text/html; charset=utf-8",
+            body: b"<!doctype html><html><head><meta charset='utf-8'></head><body>This pairing link is invalid or has expired.</body></html>".to_vec(),
         };
     }
 
@@ -13724,10 +13781,10 @@ pub fn handle_request(req: &HttpRequest, state: &Arc<Mutex<AppState>>, web_dir: 
                     format_offline_target_error(pinned_u, resolved_ip.as_deref())
                 } else if let Some(ref ip_str) = resolved_ip {
                     format!(
-                        "iPhone terdeteksi di Wi-Fi ({ip_str}), tetapi belum di-pairing untuk RemotePairing Wi-Fi. Colok kabel USB 1x lalu klik 'Set up Wi-Fi'."
+                        "iPhone terdeteksi di Wi-Fi ({ip_str}), tetapi belum di-pairing untuk RemotePairing Wi-Fi. Mulai Pairing QR; 'Set up Wi-Fi' via USB hanya cadangan lanjutan."
                     )
                 } else {
-                    "Streaming Wi-Fi nirkabel tidak menemukan iPhone di jaringan Wi-Fi (_remotepairing._tcp.local.). Pastikan iPhone menyala, terhubung di Wi-Fi yang sama, dan sudah pernah 'Set up Wi-Fi' 1x via USB.".to_string()
+                    "Streaming Wi-Fi nirkabel tidak menemukan iPhone di jaringan Wi-Fi (_remotepairing._tcp.local.). Pastikan iPhone menyala, terhubung di Wi-Fi yang sama, dan sudah di-pairing lewat QR; 'Set up Wi-Fi' via USB hanya cadangan lanjutan.".to_string()
                 };
                 let err_json = iphone_link_apple::mirror::global_set_screen_error(
                     pinned_udid.as_deref(),
@@ -13875,6 +13932,53 @@ pub fn handle_request(req: &HttpRequest, state: &Arc<Mutex<AppState>>, web_dir: 
             ));
         }
         return HttpResponse::ok_json(&scan_resp);
+    }
+
+    // QR-assisted cable-free pairing (loopback API only; LAN guard rejects these paths).
+    if path == "/api/pair/qr/start" && req.method == "POST" {
+        let mode_raw = parse_string_param(&req.body, "mode").unwrap_or_default();
+        let Some(mode) = PairQrMode::parse(&mode_raw) else {
+            return HttpResponse {
+                status_code: 400,
+                status_text: "Bad Request",
+                content_type: "application/json; charset=utf-8",
+                body: b"{\"ok\":false,\"error\":\"mode must be paired_macs or airplay_only\"}".to_vec(),
+            };
+        };
+        let http_port = match state.lock() {
+            Ok(s) => s.server_port,
+            Err(_) => {
+                return HttpResponse {
+                    status_code: 500,
+                    status_text: "Internal Server Error",
+                    content_type: "application/json; charset=utf-8",
+                    body: b"{\"ok\":false,\"error\":\"state lock failed\"}".to_vec(),
+                }
+            }
+        };
+        return match pair_qr::start_qr_pairing(mode, http_port) {
+            Ok(info) => HttpResponse::ok_json(&info.to_json()),
+            Err(e) => HttpResponse {
+                status_code: 500,
+                status_text: "Internal Server Error",
+                content_type: "application/json; charset=utf-8",
+                body: format!(
+                    "{{\"ok\":false,\"error\":\"{}\"}}",
+                    escape_json_str(&e)
+                )
+                .into_bytes(),
+            },
+        };
+    }
+    if path == "/api/pair/qr/status" && req.method == "GET" {
+        return HttpResponse::ok_json(&pair_qr::status_json());
+    }
+    if path == "/api/pair/qr/cancel" && req.method == "POST" {
+        let ok = pair_qr::cancel_qr_pairing();
+        return HttpResponse::ok_json(&format!(
+            "{{\"ok\":{},\"state\":\"idle\"}}",
+            if ok { "true" } else { "false" }
+        ));
     }
 
     if path == "/api/wifi/pair" || path == "/api/wifi/setup" {
@@ -16366,6 +16470,89 @@ mod tests {
 
         env::remove_var("USBMUXD_SOCKET_ADDRESS");
         env::remove_var("IPHONE_LINK_WIFI_STATE_PATH");
+        env::remove_var("IPHONE_LINK_PAIRING_DIR");
+        let _ = fs::remove_dir_all(&tmp_root);
+    }
+
+    #[test]
+    fn test_tahap244_pair_qr_endpoints_and_narrow_lan_page() {
+        let _guard = TEST_SERIAL_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let state = Arc::new(Mutex::new(AppState::default()));
+        state.lock().unwrap().server_port = 19432;
+        let req = |method: &str, path: &str, query: &str, body: &str| HttpRequest {
+            method: method.to_string(),
+            path: path.to_string(),
+            query: query.to_string(),
+            headers: HashMap::new(),
+            body: body.to_string(),
+            body_bytes: body.as_bytes().to_vec(),
+        };
+
+        let tmp_root = env::temp_dir().join("iphone_link_tahap244_pair_qr_test");
+        let _ = fs::remove_dir_all(&tmp_root);
+        fs::create_dir_all(&tmp_root).unwrap();
+        env::set_var("IPHONE_LINK_TEST_LOOPBACK_ONLY", "1");
+        env::set_var("IPHONE_LINK_PAIRING_DIR", &tmp_root);
+
+        // Invalid mode is rejected before any listener/session is created.
+        let bad = handle_request(
+            &req("POST", "/api/pair/qr/start", "", r#"{"mode":"bogus"}"#),
+            &state,
+            Path::new("web"),
+        );
+        assert_eq!(bad.status_code, 400);
+
+        let start = handle_request(
+            &req("POST", "/api/pair/qr/start", "", r#"{"mode":"airplay_only"}"#),
+            &state,
+            Path::new("web"),
+        );
+        assert_eq!(start.status_code, 200);
+        let start_body = String::from_utf8_lossy(&start.body).to_string();
+        let start_json: serde_json::Value = serde_json::from_str(&start_body).unwrap();
+        assert_eq!(start_json["ok"], true);
+        assert_eq!(start_json["mode"], "airplay_only");
+        assert!(start_json["pin"].is_null(), "AirPlay-only mode must not create a PIN");
+        assert_eq!(start_json["port"], 19432, "QR page must use the actual HTTP server port");
+        assert!(start_json["pair_port"].is_null(), "AirPlay-only mode has no RPPairing listener");
+        let qr_url = start_json["qr_url"].as_str().unwrap().to_string();
+        let query = qr_url.split('?').nth(1).unwrap_or("").to_string();
+        assert!(qr_url.starts_with("http://") && qr_url.contains(":19432/q?i="), "got {qr_url}");
+        assert!(query.contains("m=airplay_only"));
+
+        let status = handle_request(&req("GET", "/api/pair/qr/status", "", ""), &state, Path::new("web"));
+        assert_eq!(status.status_code, 200);
+        let status_body = String::from_utf8_lossy(&status.body);
+        assert!(status_body.contains(r#""state":"advertising""#), "got {status_body}");
+
+        let page = handle_request(&req("GET", "/q", &query, ""), &state, Path::new("web"));
+        assert_eq!(page.status_code, 200);
+        let page_body = String::from_utf8_lossy(&page.body);
+        assert!(page_body.contains("Screen Mirroring") && page_body.contains("iPhone Link"));
+        assert!(!page_body.contains("Enter this one-time PIN"));
+
+        let bad_page = handle_request(
+            &req("GET", "/q", "i=nope&c=nope&m=airplay_only", ""),
+            &state,
+            Path::new("web"),
+        );
+        assert_eq!(bad_page.status_code, 400);
+
+        let lan_ip = IpAddr::V4(Ipv4Addr::new(192, 168, 1, 42));
+        assert!(is_lan_request_allowed(lan_ip, "GET", &format!("/q?{query}")));
+        assert!(!is_lan_request_allowed(lan_ip, "POST", "/q"));
+        assert!(!is_lan_request_allowed(lan_ip, "GET", "/api/pair/qr/status"));
+
+        let cancel = handle_request(
+            &req("POST", "/api/pair/qr/cancel", "", "{}"),
+            &state,
+            Path::new("web"),
+        );
+        assert_eq!(cancel.status_code, 200);
+        let after = handle_request(&req("GET", "/api/pair/qr/status", "", ""), &state, Path::new("web"));
+        assert!(String::from_utf8_lossy(&after.body).contains(r#""state":"idle""#));
+
+        env::remove_var("IPHONE_LINK_TEST_LOOPBACK_ONLY");
         env::remove_var("IPHONE_LINK_PAIRING_DIR");
         let _ = fs::remove_dir_all(&tmp_root);
     }
