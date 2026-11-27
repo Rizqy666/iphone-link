@@ -3607,8 +3607,8 @@ export component MainWindow inherits Window {
 
                                     Text {
                                         text: root.is-en
-                                            ? "1. Tap Pair via QR, then scan the code with your iPhone (no cable).\n2. iOS 27+: open Settings > Developer > Paired Macs > Other Devices and enter the PIN.\n3. iOS 17-26: use Control Center > Screen Mirroring > iPhone Link (AirPlay H.264, basic control).\n4. USB \"Set up Wi-Fi\" is only an advanced fallback, never the first step."
-                                            : "1. Ketuk Pasang via QR, lalu pindai kode dengan iPhone (tanpa kabel).\n2. iOS 27+: buka Settings > Developer > Paired Macs > Other Devices dan masukkan PIN.\n3. iOS 17-26: buka Control Center > Screen Mirroring > iPhone Link (AirPlay H.264, kontrol dasar).\n4. \"Atur Wi-Fi\" lewat USB hanya cadangan lanjutan, bukan langkah pertama.";
+                                            ? "1. Tap Pair via QR, then scan the code with your iPhone (no cable).\n2. iOS 27+: open Settings > Developer > Paired Macs > Other Devices and enter the PIN.\n3. iOS 18-26: the AirPlay-only QR starts the receiver; use Control Center > Screen Mirroring > iPhone Link.\n4. For touch/keyboard on iOS 18-26, run \"Set up Wi-Fi\" once via USB (no Apple ID), then unplug. Full native control needs iOS 27+."
+                                            : "1. Ketuk Pasang via QR, lalu pindai kode dengan iPhone (tanpa kabel).\n2. iOS 27+: buka Settings > Developer > Paired Macs > Other Devices dan masukkan PIN.\n3. iOS 18-26: QR AirPlay-only otomatis menyalakan receiver; buka Control Center > Screen Mirroring > iPhone Link.\n4. Untuk touch/keyboard di iOS 18-26, lakukan \"Atur Wi-Fi\" sekali via USB (tanpa Apple ID), lalu cabut kabel. Kontrol penuh butuh iOS 27+.";
                                         color: root.text-muted;
                                         font-size: 10.5px;
                                         wrap: word-wrap;

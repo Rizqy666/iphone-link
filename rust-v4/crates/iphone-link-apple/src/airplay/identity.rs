@@ -79,7 +79,7 @@ impl AirPlayIdentity {
 
     pub fn load_or_create(path: &Path) -> Self {
         if let Ok(raw) = std::fs::read_to_string(path) {
-            if let Ok(val) = serde_json::from_str(&raw) {
+            if let Ok(val) = serde_json::from_str::<serde_json::Value>(&raw) {
                 let seed_opt = val
                     .get("seed")
                     .and_then(|v| v.as_str())

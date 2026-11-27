@@ -1334,7 +1334,7 @@ mod tests {
         let (code, info_bp) = send_rtsp(&mut rtsp, "GET", "/info", 1, None, &[]);
         assert_eq!(code, 200);
         assert!(info_bp.starts_with(b"bplist00"));
-        let info_val = plist::from_bytes(&info_bp).expect("decode /info bplist00");
+        let info_val = plist::from_bytes::<plist::Value>(&info_bp).expect("decode /info bplist00");
         let info_dict = info_val.as_dictionary().expect("/info dictionary");
         assert_eq!(info_dict.get("hevc").and_then(|v| v.as_boolean()), Some(false));
         assert_eq!(info_dict.get("name").and_then(|v| v.as_string()), Some("iPhone Link"));
@@ -1415,7 +1415,7 @@ mod tests {
             &s1_bp,
         );
         assert_eq!(code, 200);
-        let s1_val = plist::from_bytes(&s1_resp).expect("decode SETUP1 resp");
+        let s1_val = plist::from_bytes::<plist::Value>(&s1_resp).expect("decode SETUP1 resp");
         let timing_port = s1_val
             .as_dictionary()
             .and_then(|d| d.get("timingPort"))
@@ -1440,7 +1440,7 @@ mod tests {
             &s2_bp,
         );
         assert_eq!(code, 200);
-        let s2_val = plist::from_bytes(&s2_resp).expect("decode SETUP2 resp");
+        let s2_val = plist::from_bytes::<plist::Value>(&s2_resp).expect("decode SETUP2 resp");
         let data_port = s2_val
             .as_dictionary()
             .and_then(|d| d.get("streams"))
@@ -1748,7 +1748,7 @@ mod tests {
         let s2_bp = plist::to_bytes_bplist00(&Value::Dictionary(s2)).unwrap();
         let (code, s2_resp) = send_rtsp(&mut rtsp, "SETUP", "rtsp://127.0.0.1/1", 5, Some("application/x-apple-binary-plist"), &s2_bp);
         assert_eq!(code, 200);
-        let s2_val = plist::from_bytes(&s2_resp).unwrap();
+        let s2_val = plist::from_bytes::<plist::Value>(&s2_resp).unwrap();
         let data_port = s2_val
             .as_dictionary().unwrap()
             .get("streams").unwrap().as_array().unwrap()[0]
@@ -1866,7 +1866,7 @@ mod tests {
         let s1_bp = plist::to_bytes_bplist00(&Value::Dictionary(s1)).unwrap();
         let (code, s1_resp) = send_rtsp(&mut rtsp, "SETUP", "rtsp://127.0.0.1/1", 3, Some("application/x-apple-binary-plist"), &s1_bp);
         assert_eq!(code, 200);
-        let s1_val = plist::from_bytes(&s1_resp).unwrap();
+        let s1_val = plist::from_bytes::<plist::Value>(&s1_resp).unwrap();
         let s1_dict = s1_val.as_dictionary().unwrap();
         let timing_port = s1_dict.get("timingPort").unwrap().as_unsigned_integer().unwrap() as u16;
         let event_port = s1_dict.get("eventPort").unwrap().as_unsigned_integer().unwrap() as u16;
@@ -2005,7 +2005,7 @@ mod tests {
             &s2_bp,
         );
         assert_eq!(code, 200);
-        let s2_val = plist::from_bytes(&s2_resp).unwrap();
+        let s2_val = plist::from_bytes::<plist::Value>(&s2_resp).unwrap();
         let data_port = s2_val
             .as_dictionary()
             .unwrap()
@@ -2393,7 +2393,7 @@ mod tests {
             &s2_bp,
         );
         assert_eq!(code, 200);
-        let s2_val = plist::from_bytes(&s2_resp).unwrap();
+        let s2_val = plist::from_bytes::<plist::Value>(&s2_resp).unwrap();
         let data_port = s2_val
             .as_dictionary().unwrap()
             .get("streams").unwrap().as_array().unwrap()[0]
@@ -2558,7 +2558,7 @@ mod tests {
             &plist::to_bytes_bplist00(&Value::Dictionary(s1)).unwrap(),
         );
         assert_eq!(code, 200);
-        let s1_d = plist::from_bytes(&s1_resp).unwrap().into_dictionary().unwrap();
+        let s1_d = plist::from_bytes::<plist::Value>(&s1_resp).unwrap().into_dictionary().unwrap();
         let timing_port = s1_d.get("timingPort").unwrap().as_unsigned_integer().unwrap() as u16;
         let event_port = s1_d.get("eventPort").unwrap().as_unsigned_integer().unwrap() as u16;
         assert!(timing_port > 0 && event_port > 0);
@@ -2594,7 +2594,7 @@ mod tests {
             &plist::to_bytes_bplist00(&Value::Dictionary(s2v)).unwrap(),
         );
         assert_eq!(code, 200);
-        let video_port = plist::from_bytes(&s2v_resp)
+        let video_port = plist::from_bytes::<plist::Value>(&s2v_resp)
             .unwrap()
             .as_dictionary().unwrap()
             .get("streams").unwrap().as_array().unwrap()[0]
@@ -2617,7 +2617,7 @@ mod tests {
             &plist::to_bytes_bplist00(&Value::Dictionary(s2a)).unwrap(),
         );
         assert_eq!(code, 200);
-        let s2a_st = plist::from_bytes(&s2a_resp)
+        let s2a_st = plist::from_bytes::<plist::Value>(&s2a_resp)
             .unwrap()
             .as_dictionary().unwrap()
             .get("streams").unwrap().as_array().unwrap()[0]
@@ -2772,7 +2772,7 @@ mod tests {
             &plist::to_bytes_bplist00(&Value::Dictionary(s1)).unwrap(),
         );
         assert_eq!(code, 200);
-        let timing_port = plist::from_bytes(&s1_resp)
+        let timing_port = plist::from_bytes::<plist::Value>(&s1_resp)
             .unwrap()
             .as_dictionary().unwrap()
             .get("timingPort").unwrap().as_unsigned_integer().unwrap() as u16;
@@ -2869,7 +2869,7 @@ mod tests {
             &plist::to_bytes_bplist00(&Value::Dictionary(s2)).unwrap(),
         );
         assert_eq!(code, 200);
-        let data_port = plist::from_bytes(&s2_resp)
+        let data_port = plist::from_bytes::<plist::Value>(&s2_resp)
             .unwrap()
             .as_dictionary().unwrap()
             .get("streams").unwrap().as_array().unwrap()[0]
@@ -3000,7 +3000,7 @@ mod tests {
 
         // 3. Verify GET /info bplist00 consistency with mDNS TXT
         let bp = receiver.build_info_bplist(None, &[]);
-        let val = plist::from_bytes(&bp).expect("valid GET /info bplist00");
+        let val = plist::from_bytes::<plist::Value>(&bp).expect("valid GET /info bplist00");
         let d = val.as_dictionary().expect("info dict");
         assert_eq!(d.get("features").and_then(|v| v.as_unsigned_integer()), Some(feat_u64));
         assert_eq!(d.get("statusFlags").and_then(|v| v.as_unsigned_integer()), Some(68));
@@ -3072,7 +3072,7 @@ mod tests {
         let s1_bp = plist::to_bytes_bplist00(&Value::Dictionary(s1)).unwrap();
         let (sc, body) = send_rtsp(&mut rtsp, "SETUP", "rtsp://127.0.0.1/1", 5, Some("application/x-apple-binary-plist"), &s1_bp);
         assert_eq!(sc, 200);
-        let resp_val = plist::from_bytes(&body).unwrap();
+        let resp_val = plist::from_bytes::<plist::Value>(&body).unwrap();
         let resp_d = resp_val.as_dictionary().unwrap();
         let our_timing = resp_d.get("timingPort").and_then(|v| v.as_unsigned_integer()).unwrap() as u16;
         assert!(our_timing > 0);
@@ -3187,7 +3187,7 @@ mod tests {
             Some("application/x-apple-binary-plist"),
             &plist::to_bytes_bplist00(&Value::Dictionary(s1)).unwrap(),
         );
-        let event_port = plist::from_bytes(&s1_body)
+        let event_port = plist::from_bytes::<plist::Value>(&s1_body)
             .unwrap()
             .as_dictionary()
             .unwrap()
@@ -3221,7 +3221,7 @@ mod tests {
             &plist::to_bytes_bplist00(&Value::Dictionary(s2)).unwrap(),
         );
         assert_eq!(sc2, 200);
-        let s2_val = plist::from_bytes(&s2_body).unwrap();
+        let s2_val = plist::from_bytes::<plist::Value>(&s2_body).unwrap();
         let s2_streams = s2_val
             .as_dictionary()
             .unwrap()
@@ -3311,7 +3311,7 @@ mod tests {
             hevc: false,
         };
         let bp = receiver.build_info_bplist(None, &[]);
-        let val = plist::from_bytes(&bp).expect("valid GET /info bplist00");
+        let val = plist::from_bytes::<plist::Value>(&bp).expect("valid GET /info bplist00");
         let d = val.as_dictionary().expect("info dict");
 
         // Strict no-HEVC & no-PTP bits preserved
@@ -3469,7 +3469,7 @@ mod tests {
             &plist::to_bytes_bplist00(&Value::Dictionary(s2)).unwrap(),
         );
         assert_eq!(sc2, 200);
-        let s2_val = plist::from_bytes(&s2_body).unwrap();
+        let s2_val = plist::from_bytes::<plist::Value>(&s2_body).unwrap();
         let aud_entry = s2_val
             .as_dictionary()
             .unwrap()
@@ -3657,7 +3657,7 @@ mod tests {
             hevc: false,
         };
         let bp = receiver.build_info_bplist(None, &[]);
-        let val = plist::from_bytes(&bp).expect("valid GET /info bplist00");
+        let val = plist::from_bytes::<plist::Value>(&bp).expect("valid GET /info bplist00");
         let d = val.as_dictionary().expect("info dict");
         assert_eq!(d.get("hevc").and_then(|v| v.as_boolean()), Some(false));
         let feat = d.get("features").and_then(|v| v.as_unsigned_integer()).unwrap();

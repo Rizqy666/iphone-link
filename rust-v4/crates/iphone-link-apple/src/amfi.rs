@@ -3,6 +3,7 @@
 //! Replaces Python `pymobiledevice3.services.amfi.AmfiService` and provides 100% schema parity
 //! with `handset/server.py` (`GET /api/driver/diagnostics` & `POST /api/device/unlock-developer-mode`).
 
+use idevice::IdeviceService;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -170,7 +171,7 @@ pub fn execute_amfi_unlock_over_stream<S: std::io::Read + std::io::Write>(
         let mut resp_buf = vec![0u8; resp_len];
         s.read_exact(&mut resp_buf)
             .map_err(|e| format!("amfi read body: {e}"))?;
-        plist::from_bytes(&resp_buf)
+        plist::from_bytes::<plist::Value>(&resp_buf)
             .map_err(|e| format!("amfi plist decode: {e}"))?
             .into_dictionary()
             .ok_or_else(|| "amfi plist root not dictionary".to_string())
@@ -516,7 +517,7 @@ mod tests {
         let len = u32::from_le_bytes([hdr[0], hdr[1], hdr[2], hdr[3]]) as usize;
         let mut body = vec![0u8; len - 16];
         s.read_exact(&mut body).unwrap();
-        plist::from_bytes(&body).unwrap().into_dictionary().unwrap()
+        plist::from_bytes::<plist::Value>(&body).unwrap().into_dictionary().unwrap()
     }
 
     fn write_usbmux_resp(s: &mut std::net::TcpStream, dict: plist::Dictionary) {
@@ -538,7 +539,7 @@ mod tests {
         let len = u32::from_be_bytes(lb) as usize;
         let mut body = vec![0u8; len];
         s.read_exact(&mut body).unwrap();
-        plist::from_bytes(&body).unwrap().into_dictionary().unwrap()
+        plist::from_bytes::<plist::Value>(&body).unwrap().into_dictionary().unwrap()
     }
 
     fn write_len_plist(s: &mut std::net::TcpStream, dict: plist::Dictionary) {

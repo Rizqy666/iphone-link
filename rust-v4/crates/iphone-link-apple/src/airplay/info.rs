@@ -87,7 +87,7 @@ impl ReceiverInfo<'_> {
         let mut res = Dictionary::new();
         let qualifier = content_type
             .filter(|t| t.to_ascii_lowercase().contains("binary-plist"))
-            .and_then(|_| plist::from_bytes(body).ok())
+            .and_then(|_| plist::from_bytes::<plist::Value>(body).ok())
             .and_then(|v| {
                 v.as_dictionary()?
                     .get("qualifier")?

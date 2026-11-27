@@ -2072,6 +2072,60 @@ fn inprocess_api(
     String::from_utf8_lossy(&resp.body).into_owned()
 }
 
+/// Auto-start the AirPlay receiver for the iOS 17–26 QR mode so Screen Mirroring lists
+/// "iPhone Link" without a manual Start press. A one-time USB `Set up Wi-Fi` creates a trusted
+/// RemotePairing record; when one exists we route via `mode: "auto"` with the cached UDID and
+/// iOS version so the hybrid HID gate worker can run alongside AirPlay. Without a record we
+/// stay picture-only (`mode: "airplay"`). No new listener, no PIN handling, no Apple ID.
+fn auto_start_airplay_receiver_for_qr(
+    state: &Arc<Mutex<server_v4::AppState>>,
+    web_dir: &Path,
+) -> (bool, bool) {
+    let paired = iphone_link_apple::wifi::wifi_paired_udids();
+    let candidate = paired.into_iter().find_map(|udid| {
+        // `wifi_paired_udids()` also lists devices flagged as Wi-Fi enabled without a real
+        // RemotePairing record; only a persisted record can satisfy the HID tunnel.
+        if iphone_link_apple::wifi::find_record(&udid).is_none() {
+            return None;
+        }
+        let meta = iphone_link_apple::wifi::read_device_metadata_from_wifi_state(&udid);
+        let ios_version = meta.ios_version.trim().to_string();
+        let major = ios_version
+            .split('.')
+            .next()
+            .and_then(|s| s.trim().parse::<u32>().ok());
+        if matches!(major, Some(17..=26)) {
+            Some((udid, ios_version))
+        } else {
+            None
+        }
+    });
+
+    let body = match candidate {
+        Some((udid, ios_version)) => serde_json::json!({
+            "mode": "auto",
+            "transport": "wifi",
+            "advertiseMdns": true,
+            "udid": udid,
+            "iosVersion": ios_version,
+        })
+        .to_string(),
+        None => r#"{"mode":"airplay","transport":"wifi","advertiseMdns":true}"#.to_string(),
+    };
+
+    let raw = inprocess_api(state, web_dir, "POST", "/api/screen/start", &body);
+    let parsed: Option<serde_json::Value> = serde_json::from_str(&raw).ok();
+    let airplay_active = parsed
+        .as_ref()
+        .and_then(|v| v.get("airplayActive").and_then(serde_json::Value::as_bool))
+        .unwrap_or(false);
+    let hid_available = parsed
+        .as_ref()
+        .and_then(|v| v.get("hidControlAvailable").and_then(serde_json::Value::as_bool))
+        .unwrap_or(false);
+    (airplay_active, hid_available)
+}
+
 /// Start a QR pairing session and poll it off the Slint event loop. The PIN is only ever copied
 /// into UI properties; it is never written to logs or disk.
 fn spawn_pair_qr_flow(
@@ -2133,6 +2187,28 @@ fn spawn_pair_qr_flow(
             return;
         }
 
+        // iOS 18 AirPlay-only: start the receiver immediately so the iPhone sees "iPhone Link"
+        // in Screen Mirroring without an extra Start press. Hybrid HID is only attempted when a
+        // trusted RemotePairing record already exists (one-time USB `Set up Wi-Fi`).
+        let mut receiver_note = String::new();
+        if mode == PairQrMode::AirPlayOnly {
+            let (airplay_active, hid_available) =
+                auto_start_airplay_receiver_for_qr(&state, &web_dir);
+            receiver_note = if lang_en {
+                match (airplay_active, hid_available) {
+                    (true, true) => "\nAirPlay receiver is running; touch/keyboard control is being attempted for the paired device.".to_string(),
+                    (true, false) => "\nAirPlay receiver is running. For touch/keyboard, run \"Set up Wi-Fi\" once via USB (no Apple ID), then unplug the cable.".to_string(),
+                    _ => "\nAirPlay receiver could not start. Allow UDP 5353 and TCP 7100 in Windows Firewall.".to_string(),
+                }
+            } else {
+                match (airplay_active, hid_available) {
+                    (true, true) => "\nReceiver AirPlay aktif; kontrol touch/keyboard sedang dicoba untuk perangkat yang sudah dipasangkan.".to_string(),
+                    (true, false) => "\nReceiver AirPlay aktif. Untuk touch/keyboard, lakukan \"Atur Wi-Fi\" sekali lewat USB (tanpa Apple ID), lalu cabut kabel.".to_string(),
+                    _ => "\nReceiver AirPlay gagal start. Izinkan UDP 5353 dan TCP 7100 di Firewall Windows.".to_string(),
+                }
+            };
+        }
+
         let pin = start
             .get("pin")
             .and_then(serde_json::Value::as_str)
@@ -2168,31 +2244,31 @@ fn spawn_pair_qr_flow(
                     "iOS 17–26 · AirPlay saja (tanpa USB)"
                 },
                 if lang_en {
-                    "Scan the QR, then open Control Center → Screen Mirroring → iPhone Link. This mode uses AirPlay H.264 with basic control; RemoteXPC HID needs iOS 27+."
+                    "Scan the QR, then open Control Center → Screen Mirroring → iPhone Link. iOS 18: picture and audio work cable-free; touch/keyboard needs a one-time USB \"Set up Wi-Fi\" (no Apple ID). Full native control requires iOS 27+."
                 } else {
-                    "Pindai QR, lalu buka Control Center → Screen Mirroring → iPhone Link. Mode ini memakai AirPlay H.264 dengan kontrol dasar; HID RemoteXPC butuh iOS 27+."
+                    "Pindai QR, lalu buka Control Center → Screen Mirroring → iPhone Link. iOS 18: gambar dan audio jalan tanpa kabel; touch/keyboard butuh sekali \"Atur Wi-Fi\" via USB (tanpa Apple ID). Kontrol penuh butuh iOS 27+."
                 },
             ),
         };
-        let qr_image = pair_qr::qr_rgba_for_url(&qr_url).ok().map(|(rgba, w, h)| {
-            let pixels = SharedPixelBuffer::<Rgba8Pixel>::clone_from_slice(&rgba, w, h);
-            Image::from_rgba8(pixels)
-        });
+        // `slint::Image` is not Send; carry only raw RGBA bytes into the event loop.
+        let qr_rgba = pair_qr::qr_rgba_for_url(&qr_url).ok();
         let message = if lang_en {
             format!("Waiting for the iPhone… Host: {host_name}")
         } else {
             format!("Menunggu iPhone… Host: {host_name}")
         };
         let pin_ui = pin.clone();
-        let image_ui = qr_image.clone();
+        let qr_rgba_ui = qr_rgba.clone();
+        let ui_weak_ui = ui_weak.clone();
         let mode_ui = mode_str;
         let label_ui = mode_label.to_string();
-        let steps_ui = steps.to_string();
+        let steps_ui = format!("{steps}{receiver_note}");
         let message_ui = message.clone();
         let _ = slint::invoke_from_event_loop(move || {
-            if let Some(u) = ui_weak.upgrade() {
-                if let Some(img) = image_ui {
-                    u.set_qr_image(img);
+            if let Some(u) = ui_weak_ui.upgrade() {
+                if let Some((rgba, w, h)) = qr_rgba_ui {
+                    let pixels = SharedPixelBuffer::<Rgba8Pixel>::clone_from_slice(&rgba, w, h);
+                    u.set_qr_image(Image::from_rgba8(pixels));
                 }
                 u.set_qr_pin(SharedString::from(pin_ui));
                 u.set_qr_mode(SharedString::from(mode_ui));
@@ -5342,12 +5418,12 @@ pub fn run_native_ui(
                     }
                 } else {
                     let resp = inprocess_api(&st_t, &wd_t, "POST", "/api/system/install_hevc", "{}");
-                    let installed_now = serde_json::from_str(&resp)
+                    let installed_now = serde_json::from_str::<serde_json::Value>(&resp)
                         .ok()
                         .and_then(|v| v.get("installed").and_then(|b| b.as_bool()))
                         .unwrap_or(false);
                     if !installed_now {
-                        let launched = serde_json::from_str(&resp)
+                        let launched = serde_json::from_str::<serde_json::Value>(&resp)
                             .ok()
                             .and_then(|v| v.get("launchedInstaller").and_then(|b| b.as_bool()))
                             .unwrap_or(false);
@@ -7602,7 +7678,7 @@ pub fn run_native_ui(
             }
 
             let screen_json = mirror::global_screen_status_json();
-            let Ok(sv) = serde_json::from_str(&screen_json) else {
+            let Ok(sv) = serde_json::from_str::<serde_json::Value>(&screen_json) else {
                 return;
             };
             let phase = sv.get("phase").and_then(|v| v.as_str()).unwrap_or("idle");
@@ -9910,7 +9986,7 @@ pub fn run_native_ui_selftest() -> i32 {
                                 && resolve_topbar_status_pill_text("starting", "waiting_airplay", "wifi", true, false) == "AirPlay Siap"
                                 && resolve_topbar_status_pill_text("starting", "waiting_airplay", "wifi", true, true) == "AirPlay Ready";
                             let trace_valid_json =
-                                serde_json::from_str(
+                                serde_json::from_str::<serde_json::Value>(
                                     &airplay::get_airplay_trace_json(),
                                 )
                                 .is_ok();

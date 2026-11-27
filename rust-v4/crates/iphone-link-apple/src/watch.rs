@@ -1,5 +1,6 @@
 //! Hotplug USB watcher (`UsbmuxdConnection`) and SpringBoard orientation/lock watchers.
 
+use idevice::RsdService;
 use std::collections::HashSet;
 use std::time::Duration;
 

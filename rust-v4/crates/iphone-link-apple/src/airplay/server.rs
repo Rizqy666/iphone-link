@@ -703,7 +703,7 @@ fn dispatch_rtsp(
             // iOS frequently sends TEARDOWN for audio (type=96) during first-click startup while
             // keeping mirror video (type=110), eventPort, timingPort, and RTSP alive!
             inc_trace_teardown();
-            let parsed_dict = plist::from_bytes(&req.body)
+            let parsed_dict = plist::from_bytes::<plist::Value>(&req.body)
                 .ok()
                 .and_then(|v| v.as_dictionary().cloned());
             let td_keys = parsed_dict
@@ -767,7 +767,7 @@ fn handle_setup(
     sink: &Arc<dyn AirPlaySink>,
     sess: &mut RtspSession,
 ) -> RtspResponse {
-    let val = match plist::from_bytes(body) {
+    let val = match plist::from_bytes::<plist::Value>(body) {
         Ok(v) => v,
         Err(_) => {
             record_airplay_trace("setup_parse_err", format!("bplist_len={}", body.len()));

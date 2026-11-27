@@ -1187,10 +1187,6 @@ impl<S> std::fmt::Debug for TlsPskStream<S> {
 }
 
 impl<S: AsyncRead + AsyncWrite + Unpin> AsyncRead for TlsPskStream<S> {
-    fn set_stream_nonblocking(&self, nonblocking: bool) -> io::Result<()> {
-        self.inner.set_stream_nonblocking(nonblocking)
-    }
-
     fn poll_read(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
@@ -1200,7 +1196,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin> AsyncRead for TlsPskStream<S> {
         loop {
             if this.rx_plain_pos < this.rx_plain.len() {
                 let avail = this.rx_plain.len() - this.rx_plain_pos;
-                let take = buf.unfilled_mut().len().min(avail);
+                let take = unsafe { buf.unfilled_mut().len() }.min(avail);
                 if take > 0 {
                     buf.put_slice(&this.rx_plain[this.rx_plain_pos..this.rx_plain_pos + take]);
                     this.rx_plain_pos += take;
@@ -1299,12 +1295,10 @@ impl<S: AsyncRead + AsyncWrite + Unpin> AsyncWrite for TlsPskStream<S> {
 /// Non-blockingly drains incoming keepalive/event bytes from the Wi-Fi `RPPairing` control TCP
 /// socket so its kernel receive window stays open and the socket stays alive for hours.
 pub fn drain_rp_control_nonblocking(ctrl: &mut TcpStream) -> Result<usize, String> {
-    use std::io::Read;
-    let _ = ctrl.0.set_nonblocking(true);
     let mut total = 0usize;
     let mut buf = [0u8; 4096];
     for _ in 0..8 {
-        match ctrl.0.read(&mut buf) {
+        match ctrl.try_read(&mut buf) {
             Ok(0) => return Err("RPPairing control TCP peer closed (EOF)".into()),
             Ok(n) => total += n,
             Err(e)
@@ -2350,7 +2344,7 @@ mod tests {
                     return Poll::Pending;
                 }
                 let chunk = if self.read_step % 4 == 0 { 3 } else { 1 };
-                let take = chunk.min(self.rx_wire.len()).min(buf.unfilled_mut().len());
+                let take = chunk.min(self.rx_wire.len()).min(unsafe { buf.unfilled_mut().len() });
                 let mut tmp = Vec::with_capacity(take);
                 for _ in 0..take {
                     if let Some(b) = self.rx_wire.pop_front() {

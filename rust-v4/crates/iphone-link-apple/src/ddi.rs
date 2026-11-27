@@ -144,7 +144,7 @@ pub fn is_valid_ddi_dir(kind: Kind, dir: &Path) -> bool {
     if !kind.files().iter().all(|f| is_non_empty_file(&dir.join(f))) {
         return false;
     }
-    plist::from_file(dir.join("BuildManifest.plist"))
+    plist::from_file::<_, plist::Value>(dir.join("BuildManifest.plist"))
         .ok()
         .and_then(|v| v.into_dictionary())
         .is_some()
@@ -182,7 +182,10 @@ pub fn ddi_base_url() -> String {
 ///   Win32 WinHTTP (`winhttp.dll`) into `cache_dir(kind)` (`%LOCALAPPDATA%\iPhoneLink\ddi\<folder>`).
 /// - Progress callback receives `(percent: 10..=70, status_text)`.
 /// - On failure (e.g., offline), leaves zero `.part` files behind and returns a clear bilingual error.
-pub fn ensure_ddi_files_downloaded<F>(kind: Kind, mut on_progress: F) -> Result<PathBuf, String>
+pub async fn ensure_ddi_files_downloaded_async<F>(
+    kind: Kind,
+    mut on_progress: F,
+) -> Result<PathBuf, String>
 where
     F: FnMut(u8, &str),
 {
@@ -208,7 +211,7 @@ where
         let dest = target_dir.join(filename);
         let already_ok = if *filename == "BuildManifest.plist" {
             is_non_empty_file(&dest)
-                && plist::from_file(&dest)
+                && plist::from_file::<_, plist::Value>(&dest)
                     .ok()
                     .and_then(|v| v.into_dictionary())
                     .is_some()
@@ -268,7 +271,8 @@ where
                 };
                 on_progress(sub_pct, &msg);
             },
-        );
+        )
+        .await;
 
         if let Err(err) = dl_res {
             return Err(format!(
@@ -280,7 +284,7 @@ where
         }
 
         if *filename == "BuildManifest.plist" {
-            let valid_manifest = plist::from_file(&dest)
+            let valid_manifest = plist::from_file::<_, plist::Value>(&dest)
                 .ok()
                 .and_then(|v| v.into_dictionary())
                 .is_some();
@@ -302,6 +306,20 @@ where
 
     on_progress(70, "Komponen Developer Disk Image siap dipasang ke iPhone.");
     Ok(target_dir)
+}
+
+/// Synchronous wrapper for non-async callers (tests and tooling). Async callers
+/// should use [`ensure_ddi_files_downloaded_async`] directly so no nested
+/// runtime is created.
+pub fn ensure_ddi_files_downloaded<F>(kind: Kind, on_progress: F) -> Result<PathBuf, String>
+where
+    F: FnMut(u8, &str),
+{
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| format!("Gagal membuat runtime unduhan DDI: {e}"))?
+        .block_on(ensure_ddi_files_downloaded_async(kind, on_progress))
 }
 
 /// Raw bytes of a discovered DDI folder.

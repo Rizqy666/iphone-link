@@ -4,6 +4,7 @@
 //! HTTP/2 + binary RemoteXPC `DisplayService` (`startmediastream` / `stopmediastream`)
 //! -> RFC 7798 HEVC RTP depacketizer + RTCP RCTL/RR/PLI feedback loop.
 
+use idevice::IdeviceService;
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::ffi::c_void;
 use std::net::{Ipv6Addr, SocketAddr};
@@ -1074,7 +1075,6 @@ impl CdTunnelRouter {
                         }
                     }
                 };
-                let _ = stream.set_stream_nonblocking(true);
                 let waker = noop_waker();
                 let mut cx = Context::from_waker(&waker);
                 let mut rx_acc: Vec<u8> = Vec::with_capacity(131072);
@@ -1618,7 +1618,7 @@ impl tokio::io::AsyncRead for CdTcpRw {
             }
         }
         if !guard.rx_buf.is_empty() {
-            let n = guard.rx_buf.len().min(buf.unfilled_mut().len());
+            let n = guard.rx_buf.len().min(unsafe { buf.unfilled_mut().len() });
             buf.put_slice(&guard.rx_buf[..n]);
             guard.rx_buf.drain(..n);
             return Poll::Ready(Ok(()));
@@ -1654,6 +1654,12 @@ impl tokio::io::AsyncWrite for CdTcpRw {
 
 struct CdTunnelRsdProvider {
     router: Arc<CdTunnelRouter>,
+}
+
+impl std::fmt::Debug for CdTunnelRsdProvider {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CdTunnelRsdProvider").finish_non_exhaustive()
+    }
 }
 
 impl idevice::provider::RsdProvider for CdTunnelRsdProvider {
@@ -1719,6 +1725,7 @@ fn rsd_handshake_from_peer_info(peer_info: &XpcVal) -> idevice::rsd::RsdHandshak
     idevice::rsd::RsdHandshake {
         services,
         protocol_version: 7,
+        properties: std::collections::HashMap::new(),
         uuid,
     }
 }
@@ -4895,7 +4902,7 @@ mod tests {
                 if q.is_empty() {
                     return Poll::Pending;
                 }
-                let max_take = buf.unfilled_mut().len().min(q.len());
+                let max_take = unsafe { buf.unfilled_mut().len() }.min(q.len());
                 let mut tmp = Vec::with_capacity(max_take);
                 for _ in 0..max_take {
                     if let Some(b) = q.pop_front() {
@@ -5260,7 +5267,7 @@ mod tests {
                 if q.is_empty() {
                     return Poll::Pending;
                 }
-                let max_take = buf.unfilled_mut().len().min(q.len());
+                let max_take = unsafe { buf.unfilled_mut().len() }.min(q.len());
                 let mut tmp = Vec::with_capacity(max_take);
                 for _ in 0..max_take {
                     if let Some(b) = q.pop_front() {
@@ -5592,7 +5599,7 @@ mod tests {
                 if q.is_empty() {
                     return Poll::Pending;
                 }
-                let take = 7usize.min(q.len()).min(buf.unfilled_mut().len());
+                let take = 7usize.min(q.len()).min(unsafe { buf.unfilled_mut().len() });
                 let mut tmp = Vec::with_capacity(take);
                 for _ in 0..take {
                     if let Some(b) = q.pop_front() {

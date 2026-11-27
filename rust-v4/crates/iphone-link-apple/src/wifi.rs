@@ -20,11 +20,11 @@ use idevice::{
     provider::IdeviceProvider as _,
     remote_pairing::{
         connect_tls_psk_tunnel_native, RemotePairingClient, RemotePairingLockdownService,
-        RpPairingFile, RpPairingSocket,
+        RpPairingFile,
     },
     tcp::adapter::Adapter,
     usbmuxd::{Connection, UsbmuxdAddr},
-    ReadWrite,
+    IdeviceService, ReadWrite,
 };
 use serde_json::{json, Map, Value};
 use tracing::{debug, info};
@@ -341,7 +341,7 @@ pub fn records(dir: &Path) -> Vec<Record> {
         else {
             continue;
         };
-        let Ok(val) = plist::from_file(entry.path()) else {
+        let Ok(val) = plist::from_file::<_, plist::Value>(entry.path()) else {
             continue;
         };
         let Some(d) = val.into_dictionary() else {
@@ -589,7 +589,7 @@ pub fn load_wifi_state_value() -> Value {
             "updated_at": ""
         });
     };
-    let Ok(mut val) = serde_json::from_str(&raw) else {
+    let Ok(mut val) = serde_json::from_str::<serde_json::Value>(&raw) else {
         return json!({
             "devices": {},
             "enabled_udids": [],
@@ -1382,7 +1382,7 @@ pub fn verify_lockdown_query_type(
     if stream.read_exact(&mut resp_buf).is_err() {
         return false;
     }
-    let Ok(val) = plist::from_bytes(&resp_buf) else {
+    let Ok(val) = plist::from_bytes::<plist::Value>(&resp_buf) else {
         return false;
     };
     let Some(dict) = val.as_dictionary() else {
@@ -1695,7 +1695,7 @@ impl WifiStatusPayload {
     }
 
     pub fn to_json_string(&self) -> String {
-        self.to_json_value().to_json_string()
+        self.to_json_value().to_string()
     }
 
     /// Full `/api/wifi` HTTP JSON response with top-level & nested `"wifi"` parity fields.
@@ -1707,7 +1707,7 @@ impl WifiStatusPayload {
         root.insert("ok".into(), Value::Bool(true));
         root.insert("native".into(), Value::Bool(true));
         root.insert("wifi".into(), self.to_json_value());
-        Value::Object(root).to_json_string()
+        Value::Object(root).to_string()
     }
 }
 
@@ -1759,7 +1759,7 @@ fn enrich_wifi_device_metadata_over_lockdown(ip: &str, udid: &str, timeout_ms: u
         }
         let mut rbuf = vec![0u8; rlen];
         s.read_exact(&mut rbuf).ok()?;
-        let val = plist::from_bytes(&rbuf).ok()?;
+        let val = plist::from_bytes::<plist::Value>(&rbuf).ok()?;
         val.as_dictionary()?
             .get("Value")
             .and_then(|v| v.as_string())
@@ -2303,11 +2303,19 @@ pub fn prepare_wifi_over_usb(udid: Option<&str>) -> Result<WifiPairResult, Strin
 
         match rp_res {
             Ok(()) => {
-                if !old
-                    .as_ref()
-                    .is_some_and(|r| r.public_key == rp_pf.public_key_bytes() && r.peer_alt_irk == *rp_pf.alt_irk().unwrap_or(&r.peer_alt_irk))
-                {
-                    if let Some(&irk) = rp_pf.alt_irk() {
+                let observed_irk = rp_pf.alt_irk().and_then(|bytes| {
+                    if bytes.len() != 16 {
+                        return None;
+                    }
+                    let mut irk = [0u8; 16];
+                    irk.copy_from_slice(bytes);
+                    Some(irk)
+                });
+                if !old.as_ref().is_some_and(|r| {
+                    r.public_key == rp_pf.public_key_bytes()
+                        && observed_irk.map_or(true, |irk| r.peer_alt_irk == irk)
+                }) {
+                    if let Some(irk) = observed_irk {
                         let _ = save_remote_record(
                             &resolved_udid,
                             &irk,
@@ -2477,7 +2485,7 @@ pub fn scan_wifi_json(udid: Option<&str>, timeout_ms: u64) -> String {
     obj.insert("wifi".into(), wifi_st.to_json_value());
     obj.insert("message_id".into(), Value::String(msg_id));
     obj.insert("message_en".into(), Value::String(msg_en));
-    Value::Object(obj).to_json_string()
+    Value::Object(obj).to_string()
 }
 
 /// Runs 1-time USB Wi-Fi Lockdown & RemotePairing setup and returns `/api/wifi/pair` JSON.
@@ -2490,7 +2498,7 @@ pub fn pair_wifi_json(udid: Option<&str>) -> String {
                 _ => Map::new(),
             };
             obj.insert("wifi".into(), wifi_st.to_json_value());
-            Value::Object(obj).to_json_string()
+            Value::Object(obj).to_string()
         }
         Err(err) => {
             let wifi_st = get_wifi_status(udid, false);
@@ -2509,7 +2517,7 @@ pub fn pair_wifi_json(udid: Option<&str>) -> String {
                 "message_en".into(),
                 Value::String("Plug in the iPhone first via USB cable, unlock the screen, and tap Trust This Computer.".into()),
             );
-            Value::Object(obj).to_json_string()
+            Value::Object(obj).to_string()
         }
     }
 }
@@ -2547,7 +2555,7 @@ async fn connect_raw_inner(addr: SocketAddr, record: &Record) -> Result<RawWifiC
     .map_err(|e| format!("connect {addr}: {e}"))?;
     configure_low_latency_tokio_tcp(&control_stream);
     let boxed_ctrl: Box<dyn ReadWrite> = Box::new(control_stream);
-    let mut control = RemotePairingClient::new(RpPairingSocket::new(boxed_ctrl), &host);
+    let mut control = RemotePairingClient::new(boxed_ctrl, &host);
     control
         .attempt_pair_verify()
         .await
@@ -2975,7 +2983,7 @@ mod tests {
             let len = u32::from_le_bytes([hdr[0], hdr[1], hdr[2], hdr[3]]) as usize;
             let mut body = vec![0u8; len - 16];
             s.read_exact(&mut body).unwrap();
-            plist::from_bytes(&body).unwrap().into_dictionary().unwrap()
+            plist::from_bytes::<plist::Value>(&body).unwrap().into_dictionary().unwrap()
         }
         fn write_mux(s: &mut TcpStream, d: plist::Dictionary) {
             let b = plist::to_bytes_xml(&plist::Value::Dictionary(d)).unwrap();
@@ -2995,7 +3003,7 @@ mod tests {
             let len = u32::from_be_bytes(lb) as usize;
             let mut b = vec![0u8; len];
             s.read_exact(&mut b).ok()?;
-            plist::from_bytes(&b).ok()?.into_dictionary()
+            plist::from_bytes::<plist::Value>(&b).ok()?.into_dictionary()
         }
         fn write_lp(s: &mut TcpStream, d: plist::Dictionary) {
             let b = plist::to_bytes_xml(&plist::Value::Dictionary(d)).unwrap();

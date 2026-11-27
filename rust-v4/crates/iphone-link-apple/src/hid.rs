@@ -934,17 +934,17 @@ impl StealthDimResult {
         obj.insert("stealthDimActive".into(), Value::Bool(self.stealth));
         obj.insert("level".into(), Value::String(self.level.clone()));
         obj.insert("skipped".into(), Value::Bool(self.skipped));
-        obj.insert("steps".into(), Value::Number(Number::PosInt(self.steps as u64)));
+        obj.insert("steps".into(), Value::Number(Number::from(self.steps as u64)));
         obj.insert(
             "usagePage".into(),
-            Value::Number(Number::PosInt(u64::from(HID_USAGE_PAGE_CONSUMER))),
+            Value::Number(Number::from(u64::from(HID_USAGE_PAGE_CONSUMER))),
         );
         let usage = if self.level == "min" {
             HID_USAGE_BRIGHTNESS_DOWN
         } else {
             HID_USAGE_BRIGHTNESS_UP
         };
-        obj.insert("usage".into(), Value::Number(Number::PosInt(u64::from(usage))));
+        obj.insert("usage".into(), Value::Number(Number::from(u64::from(usage))));
         serde_json::to_string(&Value::Object(obj)).unwrap_or_else(|_| "{}".to_string())
     }
 }
@@ -1084,12 +1084,12 @@ impl LockScreenResult {
         obj.insert("stealthRestored".into(), Value::Bool(self.stealth_restored));
         obj.insert(
             "restoreSteps".into(),
-            Value::Number(Number::PosInt(self.restore_steps as u64)),
+            Value::Number(Number::from(self.restore_steps as u64)),
         );
-        obj.insert("holdMs".into(), Value::Number(Number::PosInt(self.duration_ms)));
+        obj.insert("holdMs".into(), Value::Number(Number::from(self.duration_ms)));
         obj.insert(
             "eventsCount".into(),
-            Value::Number(Number::PosInt(self.button_events.len() as u64)),
+            Value::Number(Number::from(self.button_events.len() as u64)),
         );
         serde_json::to_string(&Value::Object(obj)).unwrap_or_else(|_| "{}".to_string())
     }
@@ -1194,17 +1194,17 @@ pub fn lock_trace_json() -> String {
         .unwrap_or_default();
     let entry_to_val = |e: &LockTraceEntry| -> Value {
         let mut o = Map::new();
-        o.insert("seq".into(), Value::Number(Number::PosInt(e.seq)));
-        o.insert("tsMs".into(), Value::Number(Number::PosInt(e.ts_ms)));
+        o.insert("seq".into(), Value::Number(Number::from(e.seq)));
+        o.insert("tsMs".into(), Value::Number(Number::from(e.ts_ms)));
         o.insert("channel".into(), Value::String(e.channel.clone()));
-        o.insert("holdMs".into(), Value::Number(Number::PosInt(e.hold_ms)));
+        o.insert("holdMs".into(), Value::Number(Number::from(e.hold_ms)));
         o.insert(
             "usagePage".into(),
-            Value::Number(Number::PosInt(u64::from(e.usage_page))),
+            Value::Number(Number::from(u64::from(e.usage_page))),
         );
         o.insert(
             "usageCode".into(),
-            Value::Number(Number::PosInt(u64::from(e.usage_code))),
+            Value::Number(Number::from(u64::from(e.usage_code))),
         );
         o.insert(
             "stealthWasActive".into(),
@@ -1213,7 +1213,7 @@ pub fn lock_trace_json() -> String {
         o.insert("stealthRestored".into(), Value::Bool(e.stealth_restored));
         o.insert("dispatched".into(), Value::Bool(e.dispatched));
         o.insert("ok".into(), Value::Bool(e.ok));
-        o.insert("elapsedMs".into(), Value::Number(Number::PosInt(e.elapsed_ms)));
+        o.insert("elapsedMs".into(), Value::Number(Number::from(e.elapsed_ms)));
         o.insert(
             "protocolSteps".into(),
             Value::Array(
@@ -1231,19 +1231,19 @@ pub fn lock_trace_json() -> String {
     root.insert("ok".into(), Value::Bool(true));
     root.insert(
         "lockHoldDurationMs".into(),
-        Value::Number(Number::PosInt(LOCK_HOLD_DURATION_MS)),
+        Value::Number(Number::from(LOCK_HOLD_DURATION_MS)),
     );
     root.insert(
         "lockClampMinMs".into(),
-        Value::Number(Number::PosInt(480)),
+        Value::Number(Number::from(480)),
     );
     root.insert(
         "lockClampMaxMs".into(),
-        Value::Number(Number::PosInt(520)),
+        Value::Number(Number::from(520)),
     );
     root.insert(
         "count".into(),
-        Value::Number(Number::PosInt(entries.len() as u64)),
+        Value::Number(Number::from(entries.len() as u64)),
     );
     root.insert(
         "latest".into(),
@@ -1423,11 +1423,11 @@ impl WakeUnlockResult {
         obj.insert("dispatched".into(), Value::Bool(self.dispatched));
         obj.insert(
             "swipeSteps".into(),
-            Value::Number(Number::PosInt(self.swipe_steps.len() as u64)),
+            Value::Number(Number::from(self.swipe_steps.len() as u64)),
         );
         obj.insert(
             "pinSteps".into(),
-            Value::Number(Number::PosInt(self.pin_steps.len() as u64)),
+            Value::Number(Number::from(self.pin_steps.len() as u64)),
         );
         serde_json::to_string(&Value::Object(obj)).unwrap_or_else(|_| "{}".to_string())
     }
@@ -1705,7 +1705,7 @@ pub fn dpapi_encrypt_pin_b64(pin: &str) -> Result<String, String> {
         return Ok(String::new());
     }
     let encrypted = dpapi_encrypt(trimmed.as_bytes())?;
-    Ok(plist::base64_encode(&encrypted))
+    Ok(crate::pair_qr::base64_encode(&encrypted))
 }
 
 pub fn dpapi_decrypt_pin_b64(b64: &str) -> Result<String, String> {
@@ -1713,7 +1713,7 @@ pub fn dpapi_decrypt_pin_b64(b64: &str) -> Result<String, String> {
     if trimmed.is_empty() {
         return Ok(String::new());
     }
-    let raw = plist::base64_decode(trimmed)
+    let raw = crate::pair_qr::base64_decode(trimmed)
         .map_err(|e| format!("invalid base64 DPAPI payload: {e}"))?;
     let decrypted = dpapi_decrypt(&raw)?;
     String::from_utf8(decrypted).map_err(|e| format!("decrypted PIN is not valid UTF-8: {e}"))
@@ -1800,7 +1800,7 @@ fn persist_typed_buffer_if_configured(state: &TypedBufferState) {
         "last_active".into(),
         Value::String(state.last_active_line.clone()),
     );
-    obj.insert("timestamp".into(), Value::Number(Number::Float(state.last_timestamp)));
+    obj.insert("timestamp".into(), Value::Number(Number::from_f64(state.last_timestamp).unwrap_or_else(|| Number::from(0))));
     let arr = state
         .lines
         .iter()
@@ -2562,7 +2562,7 @@ pub fn dispatch_airplay_touch_payload_json(
         (contact, dx as u16, dy as u16, is_tap)
     };
 
-    let Ok(val) = serde_json::from_str(body) else {
+    let Ok(val) = serde_json::from_str::<serde_json::Value>(body) else {
         return (false, 32768, 32768, false, 0);
     };
     if let Some(arr) = val.get("events").and_then(|v| v.as_array()) {
@@ -2608,7 +2608,7 @@ pub fn dispatch_airplay_touch_payload_json(
 /// Parses `/mirror/touch` (`/touch`) JSON body (`{events:[...]}` or single `{type,x,y}` / `{nx,ny}`),
 /// dispatches to live physical HID if active, and returns `(ok, last_x, last_y, was_sent, events_count)`.
 pub fn dispatch_touch_payload_json(body: &str, rotation_deg: u32) -> (bool, u16, u16, bool, usize) {
-    let Ok(val) = serde_json::from_str(body) else {
+    let Ok(val) = serde_json::from_str::<serde_json::Value>(body) else {
         return (false, 32768, 32768, false, 0);
     };
     if let Some(arr) = val.get("events").and_then(|v| v.as_array()) {
@@ -2653,7 +2653,7 @@ pub fn dispatch_touch_payload_json(body: &str, rotation_deg: u32) -> (bool, u16,
 
 /// Converts a wheel/scroll JSON payload (`{dy, dx, x, y}`) into a smooth multi-step swipe on physical HID.
 pub fn dispatch_scroll_payload_json(body: &str) -> (bool, bool, usize) {
-    let Ok(val) = serde_json::from_str(body) else {
+    let Ok(val) = serde_json::from_str::<serde_json::Value>(body) else {
         return (false, false, 0);
     };
     let dy = val
@@ -2688,7 +2688,7 @@ pub fn dispatch_scroll_payload_json(body: &str) -> (bool, bool, usize) {
 
 /// Parses `{"usages": [4, ...]}` integer HID usage array cleanly.
 pub fn parse_u8_usages_from_json(body: &str) -> Option<Vec<u8>> {
-    let val = serde_json::from_str(body).ok()?;
+    let val = serde_json::from_str::<serde_json::Value>(body).ok()?;
     let arr = val.get("usages")?.as_array()?;
     let mut out = Vec::with_capacity(arr.len());
     for item in arr {

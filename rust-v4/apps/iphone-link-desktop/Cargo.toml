@@ -11,7 +11,7 @@ path = "src/main.rs"
 iphone-link-apple = { path = "../../crates/iphone-link-apple" }
 iphone-link-video = { path = "../../crates/iphone-link-video" }
 iphone-link-audio = { path = "../../crates/iphone-link-audio" }
-serde_json = { path = "../../vendor/serde_json" }
+serde_json = "1.0"
 slint = { version = "1", default-features = false, features = ["std", "compat-1-2", "backend-winit", "renderer-software", "unstable-winit-030", "raw-window-handle-06"] }
 raw-window-handle = "0.6"
 

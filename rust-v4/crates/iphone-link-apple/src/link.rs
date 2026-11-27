@@ -3,6 +3,8 @@
 //! Uses `idevice` (`UsbmuxdConnection`, `CoreDeviceProxy`, `create_software_tunnel`, `RsdHandshake`,
 //! `cryptexd`, `ImageMounter`, `AmfiClient`) without requiring `wintun.dll` or Python.
 
+use idevice::RsdService;
+use idevice::IdeviceService;
 use std::sync::OnceLock;
 use std::time::Duration;
 
@@ -269,9 +271,10 @@ pub async fn ensure_ddi_with_rsd<P: idevice::provider::RsdProvider>(
         10,
         "Menyiapkan komponen iPhone (pertama kali)...",
     );
-    let dir = ddi::ensure_ddi_files_downloaded(kind, |pct, msg| {
+    let dir = ddi::ensure_ddi_files_downloaded_async(kind, |pct, msg| {
         on_stage(DdiStage::DownloadingDdi, pct, msg);
-    })?;
+    })
+    .await?;
 
     // Step 2: Read DDI assets and perform real Apple TSS personalization + device mount.
     on_stage(
@@ -283,7 +286,7 @@ pub async fn ensure_ddi_with_rsd<P: idevice::provider::RsdProvider>(
 
     match kind {
         Kind::Cryptex => {
-            let manifest_val = plist::from_bytes(&files.build_manifest)
+            let manifest_val = plist::from_bytes::<plist::Value>(&files.build_manifest)
                 .map_err(|e| format!("BuildManifest.plist tidak valid: {e}"))?;
             let manifest = manifest_val
                 .into_dictionary()
@@ -666,7 +669,7 @@ pub(crate) mod tests {
         let len = u32::from_le_bytes([hdr[0], hdr[1], hdr[2], hdr[3]]) as usize;
         let mut body = vec![0u8; len - 16];
         s.read_exact(&mut body).unwrap();
-        plist::from_bytes(&body).unwrap().into_dictionary().unwrap()
+        plist::from_bytes::<plist::Value>(&body).unwrap().into_dictionary().unwrap()
     }
 
     fn write_usbmux_resp(s: &mut std::net::TcpStream, dict: plist::Dictionary) {
@@ -688,7 +691,7 @@ pub(crate) mod tests {
         let len = u32::from_be_bytes(lb) as usize;
         let mut body = vec![0u8; len];
         s.read_exact(&mut body).unwrap();
-        plist::from_bytes(&body).unwrap().into_dictionary().unwrap()
+        plist::from_bytes::<plist::Value>(&body).unwrap().into_dictionary().unwrap()
     }
 
     fn write_len_plist(s: &mut std::net::TcpStream, dict: plist::Dictionary) {
@@ -1132,7 +1135,7 @@ pub(crate) mod tests {
             let (mut s, _) = tss_listener.accept().unwrap();
             let (req_line, body) = read_http_request(&mut s);
             assert!(req_line.starts_with("POST /TSS/controller?action=2"));
-            let req_plist = plist::from_bytes(&body).unwrap().into_dictionary().unwrap();
+            let req_plist = plist::from_bytes::<plist::Value>(&body).unwrap().into_dictionary().unwrap();
             assert_eq!(req_plist.get("@Cryptex1,Ticket").and_then(|v| v.as_boolean()), Some(true));
             assert_eq!(req_plist.get("Cryptex1,Nonce").and_then(|v| v.as_data()), Some(nonce_for_tss.as_slice()));
             let udid_bytes = req_plist.get("Cryptex1,UDID").and_then(|v| v.as_data()).unwrap();
@@ -1401,7 +1404,7 @@ pub(crate) mod tests {
                                             if s.read_exact(&mut body).is_err() {
                                                 break;
                                             }
-                                            let lreq = plist::from_bytes(&body).unwrap().into_dictionary().unwrap();
+                                            let lreq = plist::from_bytes::<plist::Value>(&body).unwrap().into_dictionary().unwrap();
                                             let kind = lreq.get("Request").and_then(|v| v.as_string()).unwrap_or("");
                                             let mut lresp = plist::Dictionary::new();
                                             match kind {
@@ -1616,7 +1619,7 @@ pub(crate) mod tests {
         let tss_srv = std::thread::spawn(move || {
             let (mut s, _) = tss_listener.accept().unwrap();
             let (_line, body) = read_http_request(&mut s);
-            let req = plist::from_bytes(&body).unwrap().into_dictionary().unwrap();
+            let req = plist::from_bytes::<plist::Value>(&body).unwrap().into_dictionary().unwrap();
             assert_eq!(req.get("@ApImg4Ticket").and_then(|v| v.as_boolean()), Some(true));
             assert_eq!(req.get("ApBoardID").and_then(|v| v.as_unsigned_integer()), Some(0x0C));
             assert_eq!(req.get("ApChipID").and_then(|v| v.as_unsigned_integer()), Some(0x8120));
@@ -1697,7 +1700,7 @@ pub(crate) mod tests {
                                             if s.read_exact(&mut body).is_err() {
                                                 break;
                                             }
-                                            let lreq = plist::from_bytes(&body).unwrap().into_dictionary().unwrap();
+                                            let lreq = plist::from_bytes::<plist::Value>(&body).unwrap().into_dictionary().unwrap();
                                             let kind = lreq.get("Request").and_then(|v| v.as_string()).unwrap_or("");
                                             let mut lresp = plist::Dictionary::new();
                                             match kind {
@@ -1740,7 +1743,7 @@ pub(crate) mod tests {
                                             if s.read_exact(&mut body).is_err() {
                                                 break;
                                             }
-                                            let mreq = plist::from_bytes(&body).unwrap().into_dictionary().unwrap();
+                                            let mreq = plist::from_bytes::<plist::Value>(&body).unwrap().into_dictionary().unwrap();
                                             let cmd = mreq.get("Command").and_then(|v| v.as_string()).unwrap_or("").to_string();
                                             steps_c.lock().unwrap().push(cmd.clone());
                                             let mut mresp = plist::Dictionary::new();
@@ -1963,7 +1966,7 @@ pub(crate) mod tests {
                                             if s.read_exact(&mut body).is_err() {
                                                 break;
                                             }
-                                            let lreq = plist::from_bytes(&body).unwrap().into_dictionary().unwrap();
+                                            let lreq = plist::from_bytes::<plist::Value>(&body).unwrap().into_dictionary().unwrap();
                                             let kind = lreq.get("Request").and_then(|v| v.as_string()).unwrap_or("");
                                             let mut lresp = plist::Dictionary::new();
                                             match kind {

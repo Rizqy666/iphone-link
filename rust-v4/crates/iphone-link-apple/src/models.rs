@@ -1,5 +1,6 @@
 //! Apple device models dictionary, screen profile detection, and native thread-safe metadata cache.
 
+use idevice::IdeviceService;
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};

@@ -3,6 +3,7 @@
 //! Latest-Frame-Wins `SubscriberQueue` (`24` frames), Clean Stop & Stealth Dim Auto-Restore,
 //! AAC-ELD -> `zlaac.dll` -> `JitterBuffer` -> WASAPI Audio Routing, and 32-Scenario Smart Auto-Rotate Controller.
 
+use idevice::RsdService;
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
@@ -3981,7 +3982,7 @@ pub fn run_long_session_endurance_benchmark(frame_count: usize) -> EnduranceBenc
         ap.extend_from_slice(&(nalu.len() as u16).to_be_bytes());
         ap.extend_from_slice(nalu);
     }
-    let _ = depack.push(&ap, 0, false);
+    let _ = depack.push_rtp(0, 0, &ap);
 
     // Prime 2 packets for MAIN_SSRC so SsrcPicker locks onto MAIN_SSRC before loop
     let idr_nal = vec![19 << 1, 0x01, 0xAF, 0x10];
@@ -4018,8 +4019,8 @@ pub fn run_long_session_endurance_benchmark(frame_count: usize) -> EnduranceBenc
                 true,
             ),
         ) {
-            for (_s, _t, p, m) in packets {
-                let _ = depack.push(&p, now_ms as u32, m);
+            for (_s, _t, p, _m) in packets {
+                let _ = depack.push_rtp(_s, now_ms as u32, &p);
             }
         }
 

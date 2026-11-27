@@ -243,8 +243,9 @@ pub fn start_qr_pairing(mode: PairQrMode, http_port: u16) -> Result<PairQrSessio
     }
 
     if mode == PairQrMode::PairedMacs {
-        // `compute_auth_tag` already returns the base64 TXT value expected by iOS.
-        let auth_tag = compute_auth_tag(&host_alt_irk, &identifier);
+        // The TXT record carries the base64 form of the 6-byte auth tag.
+        let auth_tag_bytes = compute_auth_tag(&host_alt_irk, &identifier);
+        let auth_tag = base64_encode(&auth_tag_bytes);
         let txt = vec![
             ("name".to_string(), host_name.clone()),
             ("identifier".to_string(), identifier.clone()),
@@ -1077,7 +1078,7 @@ fn find_bytes(haystack: &[u8], needle: &[u8]) -> bool {
     haystack.windows(needle.len()).any(|w| w == needle)
 }
 
-fn base64_encode(data: &[u8]) -> String {
+pub(crate) fn base64_encode(data: &[u8]) -> String {
     const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity((data.len() + 2) / 3 * 4);
     for chunk in data.chunks(3) {
@@ -1101,7 +1102,7 @@ fn base64_encode(data: &[u8]) -> String {
     out
 }
 
-fn base64_decode(data: &str) -> Result<Vec<u8>, String> {
+pub(crate) fn base64_decode(data: &str) -> Result<Vec<u8>, String> {
     fn val(c: u8) -> Option<u8> {
         match c {
             b'A'..=b'Z' => Some(c - b'A'),
